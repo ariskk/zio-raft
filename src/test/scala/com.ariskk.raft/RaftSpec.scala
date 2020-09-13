@@ -7,6 +7,7 @@ import zio.ZIO
 import zio.test.environment.TestClock
 
 import com.ariskk.raft.model._
+import Message._
 import com.ariskk.raft.Raft
 
 object RaftSpec extends DefaultRunnableSpec {
@@ -15,6 +16,7 @@ object RaftSpec extends DefaultRunnableSpec {
 
   def spec = suite("RaftSpec")(
     testM("By default a node should be in Follower state") {
+  
       lazy val program = for {
         raft <- Raft.default
         state <- raft.nodeState
@@ -37,7 +39,8 @@ object RaftSpec extends DefaultRunnableSpec {
 
       lazy val program = for {
         raft <- Raft.default
-        _ <- raft.runForLeader
+        _ <- raft.runForLeader.fork
+        _ <- TestClock.adjust(1.second)
         state <- raft.nodeState
       } yield state
 
@@ -54,6 +57,28 @@ object RaftSpec extends DefaultRunnableSpec {
       } yield state
 
       assertM(program)(equalTo(NodeState.Leader))
+
+    },
+    testM("It should step down if it receives a HeartbeatAck of a later term") {
+
+      val otherNode = RaftNode.newUniqueId
+
+      lazy val program = for {
+        raft <- Raft(Set(otherNode))
+        nodeData <- raft.node
+        _ <- raft.runFollowerLoop.fork
+        _ <- raft.offerVote(
+          VoteResponse(otherNode, nodeData.id, nodeData.term, granted = true)
+        ).fork
+        _ <- TestClock.adjust(1.second)
+        leaderState <- raft.nodeState
+        ack = HeartbeatAck(otherNode, nodeData.id, Term(3))
+        _ <- raft.offerHeartbeatAck(ack).fork
+        _ <- TestClock.adjust(1.second)
+        followerState <- raft.nodeState
+      } yield (leaderState,followerState)
+
+     assertM(program)(equalTo((NodeState.Leader, NodeState.Follower)))
 
     }
   )

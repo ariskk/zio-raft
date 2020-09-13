@@ -9,35 +9,36 @@ sealed trait Message {
 
 object Message {
 
-  // this is shit modeling. Improve
-  trait VoteMessage
-
   final case class VoteRequest(
     from: RaftNode.Id,
     to: RaftNode.Id,
     term: Term
-  ) extends Message with VoteMessage
+  ) extends Message
 
   final case class VoteResponse(
     from: RaftNode.Id,
     to: RaftNode.Id,
     term: Term,
     granted: Boolean
-  ) extends Message with VoteMessage
-
-  trait Append
+  ) extends Message
 
   final case class Heartbeat(
     from: RaftNode.Id,
     to: RaftNode.Id,
     term: Term
-  ) extends Message with Append
+  ) extends Message
+
+  final case class HeartbeatAck(
+    rom: RaftNode.Id,
+    to: RaftNode.Id,
+    term: Term
+  )
 
   final case class AppendEntries(
     from: RaftNode.Id,
     to: RaftNode.Id,
     term: Term
-  ) extends Message with Append
+  ) extends Message
 
 }
 
