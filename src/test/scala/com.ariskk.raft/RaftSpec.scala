@@ -27,7 +27,7 @@ object RaftSpec extends DefaultRunnableSpec {
     testM("It should be able to become a candidate") {
 
       lazy val program = for {
-        raft <- Raft(Set(RaftNode.newUniqueId))
+        raft <- Raft(RaftNode.newUniqueId, Set(RaftNode.newUniqueId))
         _ <- raft.becomeCandidate.commit
         state <- raft.nodeState
       } yield state
@@ -61,10 +61,11 @@ object RaftSpec extends DefaultRunnableSpec {
     },
     testM("It should step down if it receives a HeartbeatAck of a later term") {
 
+      val mainNode = RaftNode.newUniqueId
       val otherNode = RaftNode.newUniqueId
 
       lazy val program = for {
-        raft <- Raft(Set(otherNode))
+        raft <- Raft(mainNode, Set(otherNode))
         nodeData <- raft.node
         _ <- raft.runFollowerLoop.fork
         _ <- raft.offerVote(

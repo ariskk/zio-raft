@@ -64,7 +64,10 @@ object RaftNode {
     Id(value)
   }
 
-  def initial(peers: Set[Id] = Set.empty) = RaftNode(
+  def initial(
+    nodeId: Id = newUniqueId, 
+    peers: Set[Id] = Set.empty
+  ) = RaftNode(
     newUniqueId,
     Term.Zero,
     peers = peers,

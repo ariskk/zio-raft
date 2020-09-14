@@ -6,7 +6,7 @@ import zio.stm._
 
 import com.ariskk.raft.model._
 import Message._
-import Raft.Dependencies
+import Raft.State
 
 // TODO replace UIO[Unit] with type EIO = IO[Error, Unit]
 // TODO check if this can become ReaderT[NodeDeps, ZIO, Out] and this becomes an object
@@ -16,37 +16,37 @@ import Raft.Dependencies
  * It communicates with the outside world through message passing, using `TQueue` instances.
  * Communication with the outside world is asynchronous.
 */
-final class Raft(d: Dependencies) {
+final class Raft(state: State) {
 
-  def poll: UIO[Message] = d.outboundQueue.take.forever.commit
+  def poll: UIO[Message] = state.outboundQueue.take.forever.commit
 
-  def offerVote(vote: VoteResponse) = d.inboundVoteResponseQueue.offer(vote).commit
+  def offerVote(vote: VoteResponse) = state.inboundVoteResponseQueue.offer(vote).commit
 
-  def offerHeartbeatAck(ack: HeartbeatAck)= d.inboundHeartbeatAckQueue.offer(ack).commit
+  def offerHeartbeatAck(ack: HeartbeatAck)= state.inboundHeartbeatAckQueue.offer(ack).commit
 
-  private[raft] def sendMessage(m: Message): USTM[Unit] = d.outboundQueue.offer(m).unit
+  private[raft] def sendMessage(m: Message): USTM[Unit] = state.outboundQueue.offer(m).unit
 
-  private[raft] def sendMessages(ms: Iterable[Message]): USTM[Unit] = d.outboundQueue.offerAll(ms).unit
+  private[raft] def sendMessages(ms: Iterable[Message]): USTM[Unit] = state.outboundQueue.offerAll(ms).unit
 
-  private[raft] def becomeCandidate: USTM[RaftNode] = d.raftNode.updateAndGet(_.stand)
+  private[raft] def becomeCandidate: USTM[RaftNode] = state.raftNode.updateAndGet(_.stand)
 
-  private[raft] def node: UIO[RaftNode] = d.raftNode.get.commit
+  private[raft] def node: UIO[RaftNode] = state.raftNode.get.commit
 
-  private[raft] def nodeState: UIO[NodeState] = d.raftNode.get.commit.map(_.state)
+  private[raft] def nodeState: UIO[NodeState] = state.raftNode.get.commit.map(_.state)
 
-  private[raft] def nodeId: USTM[RaftNode.Id] = d.raftNode.map(_.id).get
+  private[raft] def nodeId: USTM[RaftNode.Id] = state.raftNode.map(_.id).get
 
-  private[raft] def isLeader: UIO[Boolean] = d.raftNode.get.commit.map(_.isLeader)
+  private[raft] def isLeader: UIO[Boolean] = state.raftNode.get.commit.map(_.isLeader)
 
   private def sendHeartbeats = {
     val hearbeatProgram = for {
-      currentNode <- d.raftNode.get
-      ackMsgs <- d.inboundHeartbeatAckQueue.takeAll
+      currentNode <- state.raftNode.get
+      ackMsgs <- state.inboundHeartbeatAckQueue.takeAll
       // if there are different terms here, which one should I pick?
       _ <- if (ackMsgs.exists(_.term.isAfter(currentNode.term))) {
         ZSTM.collectAll(
           ackMsgs.filter(_.term.isAfter(currentNode.term)).map(msg =>
-            d.raftNode.update(_.becomeFollower(msg.term))
+            state.raftNode.update(_.becomeFollower(msg.term))
           )
         )  
       } else {
@@ -70,12 +70,12 @@ final class Raft(d: Dependencies) {
 
   private def collectVotes(forTerm: Term): UIO[Unit] = {
     lazy val voteCollectionProgram = for {
-      maybeNewVote <- d.inboundVoteResponseQueue.poll
-      currentNode <- d.raftNode.get
+      maybeNewVote <- state.inboundVoteResponseQueue.poll
+      currentNode <- state.raftNode.get
       _ <- maybeNewVote.fold(ZSTM.unit) { newVote =>
         if (newVote.term.isAfter(forTerm))
-          d.raftNode.update(_.becomeFollower(newVote.term))
-        else d.raftNode.set(
+          state.raftNode.update(_.becomeFollower(newVote.term))
+        else state.raftNode.set(
           currentNode.addVote(newVote.from, newVote.term)
         )    
       }
@@ -118,10 +118,10 @@ final class Raft(d: Dependencies) {
   } yield ()
 
   def proccessVoteRequest(voteRequest: VoteRequest) = (for {
-    currentNode <- d.raftNode.get
+    currentNode <- state.raftNode.get
     nodeId = currentNode.id
     _ <- if (voteRequest.term.isAfter(currentNode.term))
-      d.raftNode.update(_.becomeFollower(voteRequest.term)) *> 
+      state.raftNode.update(_.becomeFollower(voteRequest.term)) *> 
         sendVoteResponse(voteRequest, granted = true)
     else if (
       voteRequest.term == currentNode.term && 
@@ -133,7 +133,7 @@ final class Raft(d: Dependencies) {
 
   def runFollowerLoop = {
   
-    lazy val followerProgram = d.heartbeatQueue.takeAll.commit.delay(
+    lazy val followerProgram = state.heartbeatQueue.takeAll.commit.delay(
         ElectionTimeout.newTimeout.value.milliseconds
       ).repeatWhile(_.nonEmpty) 
     
@@ -146,7 +146,7 @@ final class Raft(d: Dependencies) {
 
 object Raft {
 
-  case class Dependencies(
+  case class State(
     raftNode: TRef[RaftNode],
     inboundVoteResponseQueue: TQueue[VoteResponse],
     inboundVoteRequestQueue: TQueue[VoteRequest],
@@ -155,22 +155,22 @@ object Raft {
     outboundQueue: TQueue[Message]
   )
 
-  object Dependencies  {
+  object State  {
     private val DefaultQueueSize = 100
 
-    def default: UIO[Dependencies] = apply(Set.empty, DefaultQueueSize)
+    def default: UIO[State] = apply(RaftNode.newUniqueId, Set.empty, DefaultQueueSize)
 
     private def newQueue[T](queueSize: Int) = 
       TQueue.bounded[T](queueSize).commit
 
-    def apply(peers: Set[RaftNode.Id], queueSize: Int = DefaultQueueSize): UIO[Dependencies] = for {
-      node <- TRef.makeCommit(RaftNode.initial(peers))
+    def apply(nodeId: RaftNode.Id, peers: Set[RaftNode.Id], queueSize: Int = DefaultQueueSize): UIO[State] = for {
+      node <- TRef.makeCommit(RaftNode.initial(nodeId = nodeId, peers = peers))
       inboundVoteResponseQueue <- newQueue[VoteResponse](queueSize)
       inboundVoteRequestQueue <- newQueue[VoteRequest](queueSize)
       inboundHeartbeatAckQueue <- newQueue[HeartbeatAck](queueSize)
       heartbeatQueue <- newQueue[Heartbeat](queueSize)
       outboundQueue <- newQueue[Message](queueSize)
-    } yield Dependencies(
+    } yield State(
       node,
       inboundVoteResponseQueue,
       inboundVoteRequestQueue,
@@ -182,11 +182,11 @@ object Raft {
 
   val LeaderHeartbeat = 50.milliseconds
 
-  def default: UIO[Raft] =  Dependencies.default.map(d =>
+  def default: UIO[Raft] =  State.default.map(d =>
     new Raft(d)
   )
 
-  def apply(peers: Set[RaftNode.Id]) = Dependencies(peers).map(d =>
+  def apply(nodeId: RaftNode.Id, peers: Set[RaftNode.Id]) = State(nodeId, peers).map(d =>
     new Raft(d)
   )
 

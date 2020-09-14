@@ -29,10 +29,10 @@ object Message {
   ) extends Message
 
   final case class HeartbeatAck(
-    rom: RaftNode.Id,
+    from: RaftNode.Id,
     to: RaftNode.Id,
     term: Term
-  )
+  ) extends Message
 
   final case class AppendEntries(
     from: RaftNode.Id,
