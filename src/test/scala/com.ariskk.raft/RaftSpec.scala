@@ -4,7 +4,8 @@ import zio.test.{DefaultRunnableSpec, _}
 import zio.test.Assertion._
 import zio.duration._
 import zio.ZIO
-import zio.test.environment.TestClock
+import zio.test.environment._
+import zio.clock._
 
 import com.ariskk.raft.model._
 import Message._
@@ -12,7 +13,7 @@ import com.ariskk.raft.Raft
 
 object RaftSpec extends DefaultRunnableSpec {
 
-  override def aspects = List(TestAspect.timeout(2.seconds))
+  override def aspects = List(TestAspect.timeout(3.seconds))
 
   def spec = suite("RaftSpec")(
     testM("By default a node should be in Follower state") {
@@ -77,7 +78,7 @@ object RaftSpec extends DefaultRunnableSpec {
         _ <- raft.offerHeartbeatAck(ack).fork
         _ <- TestClock.adjust(1.second)
         followerState <- raft.nodeState
-      } yield (leaderState,followerState)
+      } yield (leaderState, followerState)
 
      assertM(program)(equalTo((NodeState.Leader, NodeState.Follower)))
 

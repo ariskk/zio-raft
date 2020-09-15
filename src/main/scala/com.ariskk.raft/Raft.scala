@@ -3,30 +3,36 @@ package com.ariskk.raft
 import zio._
 import zio.duration._
 import zio.stm._
+import zio.clock._
 
 import com.ariskk.raft.model._
 import Message._
 import Raft.State
 
-// TODO replace UIO[Unit] with type EIO = IO[Error, Unit]
-// TODO check if this can become ReaderT[NodeDeps, ZIO, Out] and this becomes an object
-// TODO ZIO is a reader. 
 /**
  * Runs the consensus module of a single Raft Node.
  * It communicates with the outside world through message passing, using `TQueue` instances.
- * Communication with the outside world is asynchronous.
+ * Communication with the outside world is asynchronous; all messages are fire and forget.
 */
-final class Raft(state: State) {
+final class Raft(val nodeId: RaftNode.Id, state: State) {
 
-  def poll: UIO[Message] = state.outboundQueue.take.forever.commit
+  def poll: UIO[Option[Message]] = state.outboundQueue.poll.commit
+
+  def takeAll: UIO[Seq[Message]] = state.outboundQueue.takeAll.commit
 
   def offerVote(vote: VoteResponse) = state.inboundVoteResponseQueue.offer(vote).commit
 
-  def offerHeartbeatAck(ack: HeartbeatAck)= state.inboundHeartbeatAckQueue.offer(ack).commit
+  def offerHeartbeatAck(ack: HeartbeatAck) = state.inboundHeartbeatAckQueue.offer(ack).commit
 
-  private[raft] def sendMessage(m: Message): USTM[Unit] = state.outboundQueue.offer(m).unit
+  def offerHeartbeat(h: Heartbeat) = state.heartbeatQueue.offer(h).commit
 
-  private[raft] def sendMessages(ms: Iterable[Message]): USTM[Unit] = state.outboundQueue.offerAll(ms).unit
+  def offerVoteRequest(request: VoteRequest) = state.inboundVoteRequestQueue.offer(request).commit
+
+  private[raft] def sendMessage(m: Message): USTM[Unit] =
+    state.outboundQueue.offer(m).unit
+
+  private[raft] def sendMessages(ms: Iterable[Message]): USTM[Unit] =
+    state.outboundQueue.offerAll(ms).unit
 
   private[raft] def becomeCandidate: USTM[RaftNode] = state.raftNode.updateAndGet(_.stand)
 
@@ -34,21 +40,19 @@ final class Raft(state: State) {
 
   private[raft] def nodeState: UIO[NodeState] = state.raftNode.get.commit.map(_.state)
 
-  private[raft] def nodeId: USTM[RaftNode.Id] = state.raftNode.map(_.id).get
-
   private[raft] def isLeader: UIO[Boolean] = state.raftNode.get.commit.map(_.isLeader)
 
   private def sendHeartbeats = {
     val hearbeatProgram = for {
       currentNode <- state.raftNode.get
       ackMsgs <- state.inboundHeartbeatAckQueue.takeAll
-      // if there are different terms here, which one should I pick?
       _ <- if (ackMsgs.exists(_.term.isAfter(currentNode.term))) {
-        ZSTM.collectAll(
-          ackMsgs.filter(_.term.isAfter(currentNode.term)).map(msg =>
+        ZSTM.collectAll {
+          val maxTerm = ackMsgs.map(_.term.term).max
+          ackMsgs.filter(_.term == Term(maxTerm)).map(msg =>
             state.raftNode.update(_.becomeFollower(msg.term))
           )
-        )  
+        } 
       } else {
         val heartbeats = currentNode.peers.map(p => Heartbeat(currentNode.id, p, currentNode.term))
         sendMessages(heartbeats)
@@ -58,8 +62,8 @@ final class Raft(state: State) {
     hearbeatProgram
       .commit
       .delay(Raft.LeaderHeartbeat)
-      .repeatUntilM(_ => isLeader.map(!_))
-  }
+      .repeatWhileM(_ => isLeader)
+  } *> processInboundHeartbeats
 
   private def sendVoteRequests(candidate: RaftNode): USTM[Unit] = {
     val requests = candidate.peers.map(p =>
@@ -68,17 +72,21 @@ final class Raft(state: State) {
     sendMessages(requests)
   }
 
-  private def collectVotes(forTerm: Term): UIO[Unit] = {
+  private def collectVotes(forTerm: Term) = {
     lazy val voteCollectionProgram = for {
-      maybeNewVote <- state.inboundVoteResponseQueue.poll
+      newVote <- state.inboundVoteResponseQueue.take
       currentNode <- state.raftNode.get
-      _ <- maybeNewVote.fold(ZSTM.unit) { newVote =>
-        if (newVote.term.isAfter(forTerm))
+      _ <- if (newVote.term.isAfter(forTerm))
           state.raftNode.update(_.becomeFollower(newVote.term))
-        else state.raftNode.set(
-          currentNode.addVote(newVote.from, newVote.term)
-        )    
-      }
+        else if (newVote.term == forTerm && newVote.granted) 
+          state.raftNode.set(
+            currentNode.addVote(newVote.from, newVote.term)
+          )
+        else if (newVote.term == forTerm && !newVote.granted)
+          state.raftNode.set(
+            currentNode.addVoteRejection(newVote.from, newVote.term)
+          )
+        else ZSTM.unit
     } yield ()
 
     voteCollectionProgram
@@ -86,61 +94,85 @@ final class Raft(state: State) {
       .repeatUntilM(_ =>
         nodeState.map(_ != NodeState.Candidate)
       )
-      .unit
   }
 
-  private def electionResult: ZIO[Any with clock.Clock, InvalidStateException, Unit] = for {
+  private def electionResult: ZIO[clock.Clock, Throwable, Unit] = for {
     state <- nodeState
     _ <- state match {
-      case NodeState.Follower => runFollowerLoop
+      case NodeState.Follower => processInboundHeartbeats
       case NodeState.Candidate => 
         ZIO.die(InvalidStateException("Node still in Candidate state after election has concluded"))
       case NodeState.Leader => sendHeartbeats
     }
   } yield ()
 
-  def runForLeader =  {
+  private[raft] def runForLeader =  {
     lazy val standForElectionProgram = for {
-      candidate <- becomeCandidate
-      _ <- sendVoteRequests(candidate)
+      candidate <- becomeCandidate.commit
+      _ <- sendVoteRequests(candidate).commit
     } yield candidate.term
 
-    standForElectionProgram.commit.flatMap { term =>
+    standForElectionProgram.flatMap { term =>
       collectVotes(term) *> electionResult
     }
-
   }
 
-  def sendVoteResponse(voteRequest: VoteRequest, granted: Boolean) = for {
-    fromId <- nodeId
-    response = VoteResponse(fromId, voteRequest.from, voteRequest.term, granted)
-    _ <- sendMessage(response)
-  } yield ()
+  private def sendVoteResponse(voteRequest: VoteRequest, granted: Boolean) =
+    sendMessage(VoteResponse(nodeId, voteRequest.from, voteRequest.term, granted))
 
-  def proccessVoteRequest(voteRequest: VoteRequest) = (for {
+  private def proccessVoteRequest(voteRequest: VoteRequest) = (for {
     currentNode <- state.raftNode.get
-    nodeId = currentNode.id
     _ <- if (voteRequest.term.isAfter(currentNode.term))
-      state.raftNode.update(_.becomeFollower(voteRequest.term)) *> 
-        sendVoteResponse(voteRequest, granted = true)
+      state.raftNode.update(_.becomeFollower(voteRequest.term).voteFor(voteRequest.from)) *> 
+       sendVoteResponse(voteRequest, granted = true)
     else if (
       voteRequest.term == currentNode.term && 
       (currentNode.votedFor.isEmpty || currentNode.votedFor.contains(voteRequest.from))
-    ) sendVoteResponse(voteRequest, granted = true)
-    // This is a bit of a problem will the the network layer be injected here to have this?
+    ) state.raftNode.update(_.voteFor(voteRequest.from)) *>
+      sendVoteResponse(voteRequest, granted = true)
     else sendVoteResponse(voteRequest, granted = false)
   } yield ()).commit
 
-  def runFollowerLoop = {
+  private def processInboundVoteRequests = state
+    .inboundVoteRequestQueue
+    .take
+    .commit
+    .flatMap(proccessVoteRequest)
+    .forever
+
+  private def processHeartbeat(hb: Heartbeat) = (
+    for {
+      node <- state.raftNode.get
+      term <- if (hb.term.isAfter(node.term)) 
+          state.raftNode.update(_.becomeFollower(hb.term)).map(_ =>
+            hb.term
+          )
+        else STM.succeed(node.term)
+      _ <- sendMessage(HeartbeatAck(hb.to, hb.from, term))
+    } yield ()).commit
+
+  private def processInboundHeartbeats: RIO[Clock, Unit] =
+    state.heartbeatQueue
+      .take
+      .commit
+      .disconnect
+      .timeout(ElectionTimeout.newTimeout.value.milliseconds)
+      .flatMap { maybeHeartbeat =>
+        maybeHeartbeat.fold(
+          for {
+            node <- state.raftNode.get.commit
+            _ <- if ((node.isFollower && node.votedFor.isEmpty) || node.hasLost(node.term)) runForLeader
+              else processInboundHeartbeats
+          } yield ()
+        )(
+          hb => processHeartbeat(hb) *> processInboundHeartbeats
+        )
+      }
+
+  private[raft] def runFollowerLoop = 
+    processInboundVoteRequests <&> processInboundHeartbeats
   
-    lazy val followerProgram = state.heartbeatQueue.takeAll.commit.delay(
-        ElectionTimeout.newTimeout.value.milliseconds
-      ).repeatWhile(_.nonEmpty) 
-    
-    followerProgram *> runForLeader
-  }
-  
-  def run = runFollowerLoop.forever.unit
+  def run = runFollowerLoop
 
 }
 
@@ -163,8 +195,12 @@ object Raft {
     private def newQueue[T](queueSize: Int) = 
       TQueue.bounded[T](queueSize).commit
 
-    def apply(nodeId: RaftNode.Id, peers: Set[RaftNode.Id], queueSize: Int = DefaultQueueSize): UIO[State] = for {
-      node <- TRef.makeCommit(RaftNode.initial(nodeId = nodeId, peers = peers))
+    def apply(
+      nodeId: RaftNode.Id,
+      peers: Set[RaftNode.Id],
+      queueSize: Int = DefaultQueueSize
+    ): UIO[State] = for {
+      node <- TRef.makeCommit(RaftNode.initial(nodeId, peers))
       inboundVoteResponseQueue <- newQueue[VoteResponse](queueSize)
       inboundVoteRequestQueue <- newQueue[VoteRequest](queueSize)
       inboundHeartbeatAckQueue <- newQueue[HeartbeatAck](queueSize)
@@ -182,12 +218,15 @@ object Raft {
 
   val LeaderHeartbeat = 50.milliseconds
 
-  def default: UIO[Raft] =  State.default.map(d =>
-    new Raft(d)
-  )
+  def default: UIO[Raft] =  {
+    val id = RaftNode.newUniqueId
+    State(id, Set.empty).map(d =>
+      new Raft(id, d)
+    )
+  }
 
-  def apply(nodeId: RaftNode.Id, peers: Set[RaftNode.Id]) = State(nodeId, peers).map(d =>
-    new Raft(d)
+  def apply(nodeId: RaftNode.Id, peers: Set[RaftNode.Id]) = State(nodeId, peers).map(state =>
+    new Raft(nodeId, state)
   )
 
 }
