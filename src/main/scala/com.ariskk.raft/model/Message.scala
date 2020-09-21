@@ -1,6 +1,5 @@
 package com.ariskk.raft.model
 
-// TODO Model fron/to better, those are easy to mess up
 sealed trait Message {
   def from: RaftNode.Id
   def to: RaftNode.Id
