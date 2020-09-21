@@ -28,6 +28,10 @@ final class Raft(val nodeId: RaftNode.Id, state: State) {
 
   def offerVoteRequest(request: VoteRequest) = state.inboundVoteRequestQueue.offer(request).commit
 
+  def addPeer(peer: RaftNode.Id) = state.raftNode.update(_.addPeer(peer)).commit
+
+  def removePeer(peer: RaftNode.Id) = state.raftNode.update(_.removePeer(peer)).commit
+
   private[raft] def sendMessage(m: Message): USTM[Unit] =
     state.outboundQueue.offer(m).unit
 

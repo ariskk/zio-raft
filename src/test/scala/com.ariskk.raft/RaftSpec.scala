@@ -59,6 +59,21 @@ object RaftSpec extends DefaultRunnableSpec {
 
       assertM(program)(equalTo(NodeState.Leader))
 
+    },
+    testM("It should be able to add and remove peers") {
+
+      val newPeer = RaftNode.newUniqueId
+
+      lazy val program = for {
+        raft <- Raft.default
+        _ <- raft.addPeer(newPeer)
+        peersWithNewPeer <- raft.node.map(_.peers)
+        _ <- raft.removePeer(newPeer)
+        peersWithout <- raft.node.map(_.peers)
+      } yield (peersWithNewPeer, peersWithout)
+
+      assertM(program)(equalTo((Set(newPeer), Set.empty[RaftNode.Id])))
+
     }
   )
 }
