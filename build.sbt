@@ -10,10 +10,6 @@ lazy val zioDeps = Seq(
   "dev.zio" %% "zio" % zioVersion
 )
 
-lazy val shapeless = "com.chuusai" %% "shapeless" % "2.3.3"
-
-lazy val otherDeps = Seq(shapeless)
-
 lazy val testDepds = Seq(
   "dev.zio" %% "zio-test" % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt" % zioVersion % Test,
@@ -23,10 +19,6 @@ lazy val testDepds = Seq(
 lazy val root = (project in file("."))
   .settings(
     name := "zio-raft",
-    libraryDependencies ++= zioDeps ++ testDepds ++ otherDeps,
+    libraryDependencies ++= zioDeps ++ testDepds,
     testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
   )
-
-
-
-// See https://www.scala-sbt.org/1.x/docs/Using-Sonatype.html for instructions on how to publish to Sonatype.
