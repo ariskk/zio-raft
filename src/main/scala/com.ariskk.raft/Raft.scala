@@ -42,28 +42,36 @@ final class Raft(val nodeId: RaftNode.Id, state: State) {
 
   private[raft] def isLeader: UIO[Boolean] = state.raftNode.get.commit.map(_.isLeader)
 
-  private def sendHeartbeats = {
-    val hearbeatProgram = for {
-      currentNode <- state.raftNode.get
-      ackMsgs <- state.inboundHeartbeatAckQueue.takeAll
-      _ <- if (ackMsgs.exists(_.term.isAfter(currentNode.term))) {
-        ZSTM.collectAll {
-          val maxTerm = ackMsgs.map(_.term.term).max
-          ackMsgs.filter(_.term == Term(maxTerm)).map(msg =>
-            state.raftNode.update(_.becomeFollower(msg.term))
-          )
-        } 
-      } else {
-        val heartbeats = currentNode.peers.map(p => Heartbeat(currentNode.id, p, currentNode.term))
-        sendMessages(heartbeats)
-      }
-    } yield ()
-    
-    hearbeatProgram
+  /**
+   * Collects the acknowledgements as they come. Steps down if it finds a later term.
+   * Sends heartbeats every 50 milliseconds until it steps down.
+  */
+  private def sendHeartbeats: RIO[Clock, Unit] = {
+    lazy val collectAcks = state
+      .inboundHeartbeatAckQueue
+      .takeAll
       .commit
-      .delay(Raft.LeaderHeartbeat)
-      .repeatWhileM(_ => isLeader)
-  } *> processInboundHeartbeats
+      .flatMap { acks =>
+        for {
+          currentNode <- state.raftNode.get.commit
+          maxTerm = acks.map(_.term.term).maxOption
+          _ <- maxTerm.fold(ZIO.unit) { mx =>
+            if (mx > currentNode.term.term)
+              state.raftNode.update(_.becomeFollower(Term(mx))).commit
+            else ZIO.unit
+          }
+        } yield ()
+      }.repeatWhileM(_ => isLeader)
+
+    lazy val sendHeartbeats = state.raftNode.get.commit.flatMap { currentNode =>
+      sendMessages(
+        currentNode.peers.map(p => Heartbeat(currentNode.id, p, currentNode.term))
+      ).commit
+    }.delay(Raft.LeaderHeartbeat).repeatWhileM(_ => isLeader)
+
+    (collectAcks &> sendHeartbeats) *> processInboundHeartbeats
+
+  }
 
   private def sendVoteRequests(candidate: RaftNode): USTM[Unit] = {
     val requests = candidate.peers.map(p =>

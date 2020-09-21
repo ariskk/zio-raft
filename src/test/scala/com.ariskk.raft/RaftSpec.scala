@@ -59,29 +59,6 @@ object RaftSpec extends DefaultRunnableSpec {
 
       assertM(program)(equalTo(NodeState.Leader))
 
-    },
-    testM("It should step down if it receives a HeartbeatAck of a later term") {
-
-      val mainNode = RaftNode.newUniqueId
-      val otherNode = RaftNode.newUniqueId
-
-      lazy val program = for {
-        raft <- Raft(mainNode, Set(otherNode))
-        nodeData <- raft.node
-        _ <- raft.runFollowerLoop.fork
-        _ <- raft.offerVote(
-          VoteResponse(otherNode, nodeData.id, nodeData.term, granted = true)
-        ).fork
-        _ <- TestClock.adjust(1.second)
-        leaderState <- raft.nodeState
-        ack = HeartbeatAck(otherNode, nodeData.id, Term(3))
-        _ <- raft.offerHeartbeatAck(ack).fork
-        _ <- TestClock.adjust(1.second)
-        followerState <- raft.nodeState
-      } yield (leaderState, followerState)
-
-     assertM(program)(equalTo((NodeState.Leader, NodeState.Follower)))
-
     }
   )
 }
