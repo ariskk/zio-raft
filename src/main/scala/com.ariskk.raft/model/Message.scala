@@ -41,4 +41,3 @@ object Message {
   ) extends Message
 
 }
-

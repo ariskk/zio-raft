@@ -14,10 +14,13 @@ final case class RaftNode(
 ) {
   lazy val stand = {
     val newTerm = term.increment
-    this.copy(
-      term = newTerm,
-      state = NodeState.Candidate
-    ).addVote(id, newTerm).voteFor(id)
+    this
+      .copy(
+        term = newTerm,
+        state = NodeState.Candidate
+      )
+      .addVote(id, newTerm)
+      .voteFor(id)
   }
 
   def addPeer(peer: RaftNode.Id) = this.copy(
@@ -28,10 +31,13 @@ final case class RaftNode(
     peers = peers - peer
   )
 
-  def becomeFollower(newTerm: Term) = this.copy(
-    term = newTerm,
-    state = NodeState.Follower
-  ).clearVotes(newTerm).clearVoteRejections(newTerm)
+  def becomeFollower(newTerm: Term) = this
+    .copy(
+      term = newTerm,
+      state = NodeState.Follower
+    )
+    .clearVotes(newTerm)
+    .clearVoteRejections(newTerm)
 
   def becomeLeaeder = this.copy(
     state = NodeState.Leader
@@ -39,8 +45,8 @@ final case class RaftNode(
 
   def addVote(voter: RaftNode.Id, term: Term) = {
     val currentTermVotes = votesReceived.filter(_.term == term)
-    val updatedVotes = currentTermVotes + Vote(voter, term)
-    val hasMajority = 2 * updatedVotes.size > peers.size + 1
+    val updatedVotes     = currentTermVotes + Vote(voter, term)
+    val hasMajority      = 2 * updatedVotes.size > peers.size + 1
     if (hasMajority)
       this.copy(votesReceived = updatedVotes).becomeLeaeder
     else this.copy(votesReceived = updatedVotes)
@@ -56,13 +62,12 @@ final case class RaftNode(
 
   def addVoteRejection(voter: RaftNode.Id, term: Term) = {
     val currentRejections = votesRejected.filter(_.term == term)
-    val updated = currentRejections + Vote(voter, term)
-    val hasLost = 2 * updated.size > peers.size + 1
-    if (hasLost) 
+    val updated           = currentRejections + Vote(voter, term)
+    val hasLost           = 2 * updated.size > peers.size + 1
+    if (hasLost)
       this.copy(votesRejected = updated).becomeFollower(term)
-    else  this.copy(votesRejected = updated)
+    else this.copy(votesRejected = updated)
   }
-  
 
   def clearVoteRejections(term: Term) = this.copy(
     votesRejected = votesRejected.filterNot(_.term.term < term.term)

@@ -5,7 +5,7 @@ import scala.util.Random
 final case class ElectionTimeout(value: Int) extends AnyVal
 
 object ElectionTimeout {
-  private val base = 150
+  private val base  = 150
   private val range = 150
 
   def newTimeout: ElectionTimeout =
