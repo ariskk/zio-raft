@@ -1,14 +1,11 @@
 package com.ariskk.raft
 
-import zio.test.{DefaultRunnableSpec, _}
+import zio.test.{ DefaultRunnableSpec, _ }
 import zio.test.Assertion._
 import zio.duration._
-import zio.ZIO
 import zio.test.environment._
-import zio.clock._
 
 import com.ariskk.raft.model._
-import Message._
 import com.ariskk.raft.Raft
 
 object RaftSpec extends DefaultRunnableSpec {
@@ -17,9 +14,9 @@ object RaftSpec extends DefaultRunnableSpec {
 
   def spec = suite("RaftSpec")(
     testM("By default a node should be in Follower state") {
-  
+
       lazy val program = for {
-        raft <- Raft.default
+        raft  <- Raft.default[Unit]
         state <- raft.nodeState
       } yield state
 
@@ -28,8 +25,8 @@ object RaftSpec extends DefaultRunnableSpec {
     testM("It should be able to become a candidate") {
 
       lazy val program = for {
-        raft <- Raft(RaftNode.newUniqueId, Set(RaftNode.newUniqueId))
-        _ <- raft.becomeCandidate.commit
+        raft  <- Raft[Unit](RaftNode.newUniqueId, Set(RaftNode.newUniqueId))
+        _     <- raft.becomeCandidate.commit
         state <- raft.nodeState
       } yield state
 
@@ -39,9 +36,9 @@ object RaftSpec extends DefaultRunnableSpec {
     testM("It should become leader if it runs alone") {
 
       lazy val program = for {
-        raft <- Raft.default
-        _ <- raft.runForLeader.fork
-        _ <- TestClock.adjust(1.second)
+        raft  <- Raft.default[Unit]
+        _     <- raft.runForLeader.fork
+        _     <- TestClock.adjust(1.second)
         state <- raft.nodeState
       } yield state
 
@@ -51,9 +48,9 @@ object RaftSpec extends DefaultRunnableSpec {
     testM("It should become leader if starts as a follower and doesn't receive a hearbeat") {
 
       lazy val program = for {
-        raft <- Raft.default
-        _ <- raft.runFollowerLoop.fork
-        _ <- TestClock.adjust(1.second)
+        raft  <- Raft.default[Unit]
+        _     <- raft.runFollowerLoop.fork
+        _     <- TestClock.adjust(1.second)
         state <- raft.nodeState
       } yield state
 
@@ -65,11 +62,11 @@ object RaftSpec extends DefaultRunnableSpec {
       val newPeer = RaftNode.newUniqueId
 
       lazy val program = for {
-        raft <- Raft.default
-        _ <- raft.addPeer(newPeer)
+        raft             <- Raft.default[Unit]
+        _                <- raft.addPeer(newPeer)
         peersWithNewPeer <- raft.node.map(_.peers)
-        _ <- raft.removePeer(newPeer)
-        peersWithout <- raft.node.map(_.peers)
+        _                <- raft.removePeer(newPeer)
+        peersWithout     <- raft.node.map(_.peers)
       } yield (peersWithNewPeer, peersWithout)
 
       assertM(program)(equalTo((Set(newPeer), Set.empty[RaftNode.Id])))

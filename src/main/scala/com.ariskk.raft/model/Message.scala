@@ -1,5 +1,7 @@
 package com.ariskk.raft.model
 
+import com.ariskk.raft.utils.Utils
+
 sealed trait Message {
   def from: RaftNode.Id
   def to: RaftNode.Id
@@ -21,22 +23,29 @@ object Message {
     granted: Boolean
   ) extends Message
 
-  final case class Heartbeat(
+  object AppendEntries {
+    case class Id(value: String) extends AnyVal
+
+    def newUniqueId = Id(Utils.newPrefixedId("append"))
+  }
+
+  final case class AppendEntries[T](
+    appendId: AppendEntries.Id,
     from: RaftNode.Id,
     to: RaftNode.Id,
-    term: Term
+    term: Term,
+    prevLogIndex: Index,
+    prevLogTerm: Term,
+    leaderCommitIndex: Index,
+    entries: Seq[T]
   ) extends Message
 
-  final case class HeartbeatAck(
+  final case class AppendEntriesResponse(
     from: RaftNode.Id,
     to: RaftNode.Id,
-    term: Term
-  ) extends Message
-
-  final case class AppendEntries(
-    from: RaftNode.Id,
-    to: RaftNode.Id,
-    term: Term
+    appendId: AppendEntries.Id,
+    term: Term,
+    success: Boolean
   ) extends Message
 
 }

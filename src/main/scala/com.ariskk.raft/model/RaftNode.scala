@@ -1,6 +1,6 @@
 package com.ariskk.raft.model
 
-import java.util.UUID
+import com.ariskk.raft.utils.Utils
 
 final case class RaftNode(
   id: RaftNode.Id,
@@ -10,7 +10,9 @@ final case class RaftNode(
   state: NodeState,
   leader: Option[RaftNode.Id],
   votesReceived: Set[Vote],
-  votesRejected: Set[Vote]
+  votesRejected: Set[Vote],
+  commitIndex: Index,
+  lastApplied: Index
 ) {
   lazy val stand = {
     val newTerm = term.increment
@@ -89,10 +91,7 @@ final case class RaftNode(
 object RaftNode {
   final case class Id(value: String) extends AnyVal
 
-  private[raft] def newUniqueId: Id = {
-    val value = s"node-${UUID.randomUUID().toString.take(20)}"
-    Id(value)
-  }
+  private[raft] def newUniqueId: Id = Id(Utils.newPrefixedId("node"))
 
   def initial(nodeId: Id, peers: Set[Id]) = RaftNode(
     nodeId,
@@ -102,6 +101,8 @@ object RaftNode {
     NodeState.default,
     leader = None,
     votesReceived = Set.empty,
-    votesRejected = Set.empty
+    votesRejected = Set.empty,
+    commitIndex = Index(-1),
+    lastApplied = Index(-1)
   )
 }
