@@ -12,7 +12,10 @@ final case class RaftNode(
   votesReceived: Set[Vote],
   votesRejected: Set[Vote],
   commitIndex: Index,
-  lastApplied: Index
+  lastApplied: Index,
+  // `State` feels like increasingly a better place for those
+  nextIndex: Map[RaftNode.Id, Index],
+  matchIndex: Map[RaftNode.Id, Index]
 ) {
   lazy val stand = {
     val newTerm = term.increment
@@ -103,6 +106,8 @@ object RaftNode {
     votesReceived = Set.empty,
     votesRejected = Set.empty,
     commitIndex = Index(-1),
-    lastApplied = Index(-1)
+    lastApplied = Index(-1),
+    nextIndex = Map.empty,
+    matchIndex = Map.empty
   )
 }

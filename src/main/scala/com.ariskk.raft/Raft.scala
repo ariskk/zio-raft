@@ -7,36 +7,42 @@ import zio.clock._
 
 import com.ariskk.raft.model._
 import Message._
-import Raft.State
+import Raft.{ MessageQueues, VolatileState }
+import com.ariskk.raft.storage.Storage
 
 /**
  * Runs the consensus module of a single Raft Node.
  * It communicates with the outside world through message passing, using `TQueue` instances.
  * Communication with the outside world is asynchronous; all messages are fire and forget.
  */
-final class Raft[T](val nodeId: RaftNode.Id, state: State[T]) {
+final class Raft[T](
+  val nodeId: RaftNode.Id,
+  state: VolatileState[T],
+  storage: Storage[T],
+  queues: MessageQueues[T]
+) {
 
-  def poll: UIO[Option[Message]] = state.outboundQueue.poll.commit
+  def poll: UIO[Option[Message]] = queues.outboundQueue.poll.commit
 
-  def takeAll: UIO[Seq[Message]] = state.outboundQueue.takeAll.commit
+  def takeAll: UIO[Seq[Message]] = queues.outboundQueue.takeAll.commit
 
-  def offerVote(vote: VoteResponse) = state.inboundVoteResponseQueue.offer(vote).commit
+  def offerVote(vote: VoteResponse) = queues.inboundVoteResponseQueue.offer(vote).commit
 
-  def offerAppendEntriesResponse(r: AppendEntriesResponse) = state.appendResponseQueue.offer(r).commit
+  def offerAppendEntriesResponse(r: AppendEntriesResponse) = queues.appendResponseQueue.offer(r).commit
 
-  def offerAppendEntries(entries: AppendEntries[T]) = state.appendEntriesQueue.offer(entries).commit
+  def offerAppendEntries(entries: AppendEntries[T]) = queues.appendEntriesQueue.offer(entries).commit
 
-  def offerVoteRequest(request: VoteRequest) = state.inboundVoteRequestQueue.offer(request).commit
+  def offerVoteRequest(request: VoteRequest) = queues.inboundVoteRequestQueue.offer(request).commit
 
   def addPeer(peer: RaftNode.Id) = state.raftNode.update(_.addPeer(peer)).commit
 
   def removePeer(peer: RaftNode.Id) = state.raftNode.update(_.removePeer(peer)).commit
 
   private[raft] def sendMessage(m: Message): USTM[Unit] =
-    state.outboundQueue.offer(m).unit
+    queues.outboundQueue.offer(m).unit
 
   private[raft] def sendMessages(ms: Iterable[Message]): USTM[Unit] =
-    state.outboundQueue.offerAll(ms).unit
+    queues.outboundQueue.offerAll(ms).unit
 
   private[raft] def becomeCandidate: USTM[RaftNode] = state.raftNode.updateAndGet(_.stand)
 
@@ -51,7 +57,7 @@ final class Raft[T](val nodeId: RaftNode.Id, state: State[T]) {
    * Sends heartbeats every 50 milliseconds until it steps down.
    */
   private def sendHeartbeats: RIO[Clock, Unit] = {
-    lazy val collectAcks = state.appendResponseQueue.takeAll.commit.flatMap { acks =>
+    lazy val collectAcks = queues.appendResponseQueue.takeAll.commit.flatMap { acks =>
       for {
         currentNode <- state.raftNode.get.commit
         maxTerm = acks.map(_.term.term).maxOption
@@ -92,7 +98,7 @@ final class Raft[T](val nodeId: RaftNode.Id, state: State[T]) {
 
   private def collectVotes(forTerm: Term) = {
     lazy val voteCollectionProgram = for {
-      newVote     <- state.inboundVoteResponseQueue.take
+      newVote     <- queues.inboundVoteResponseQueue.take
       currentNode <- state.raftNode.get
       _ <-
         if (newVote.term.isAfter(forTerm))
@@ -151,7 +157,7 @@ final class Raft[T](val nodeId: RaftNode.Id, state: State[T]) {
       else sendVoteResponse(voteRequest, granted = false)
   } yield ()).commit
 
-  private def processInboundVoteRequests = state.inboundVoteRequestQueue.take.commit
+  private def processInboundVoteRequests = queues.inboundVoteRequestQueue.take.commit
     .flatMap(proccessVoteRequest)
     .forever
 
@@ -164,9 +170,8 @@ final class Raft[T](val nodeId: RaftNode.Id, state: State[T]) {
     _ <- sendMessage(AppendEntriesResponse(ae.to, ae.from, ae.appendId, term, success = true))
   } yield ()).commit
 
-  // this processes heart beats are well as command (check)
   private def processInboundEntries: RIO[Clock, Unit] =
-    state.appendEntriesQueue.take.commit.disconnect
+    queues.appendEntriesQueue.take.commit.disconnect
       .timeout(ElectionTimeout.newTimeout.value.milliseconds)
       .flatMap { maybeEntries =>
         maybeEntries.fold(
@@ -188,55 +193,66 @@ final class Raft[T](val nodeId: RaftNode.Id, state: State[T]) {
 
 object Raft {
 
-  case class State[T](
-    raftNode: TRef[RaftNode],
+  case class MessageQueues[T](
     inboundVoteResponseQueue: TQueue[VoteResponse],
     inboundVoteRequestQueue: TQueue[VoteRequest],
     appendResponseQueue: TQueue[AppendEntriesResponse],
     appendEntriesQueue: TQueue[AppendEntries[T]],
-    outboundQueue: TQueue[Message],
-    log: TQueue[LogEntry[T]]
+    outboundQueue: TQueue[Message]
   )
 
-  object State {
-    private val DefaultQueueSize = 100
+  object MessageQueues {
 
-    def default[T]: UIO[State[T]] = apply(RaftNode.newUniqueId, Set.empty, DefaultQueueSize)
+    private val DefaultQueueSize = 100
 
     private def newQueue[T](queueSize: Int) =
       TQueue.bounded[T](queueSize).commit
 
-    def apply[T](
-      nodeId: RaftNode.Id,
-      peers: Set[RaftNode.Id],
-      queueSize: Int = DefaultQueueSize
-    ): UIO[State[T]] = for {
-      node                     <- TRef.makeCommit(RaftNode.initial(nodeId, peers))
+    def default[T] = apply[T](DefaultQueueSize)
+
+    def apply[T](queueSize: Int): UIO[MessageQueues[T]] = for {
       inboundVoteResponseQueue <- newQueue[VoteResponse](queueSize)
       inboundVoteRequestQueue  <- newQueue[VoteRequest](queueSize)
       appendResponseQueue      <- newQueue[AppendEntriesResponse](queueSize)
       appendEntriesQueue       <- newQueue[AppendEntries[T]](queueSize)
       outboundQueue            <- newQueue[Message](queueSize)
-      log                      <- TQueue.unbounded[LogEntry[T]].commit
-    } yield State(
-      node,
+    } yield MessageQueues(
       inboundVoteResponseQueue,
       inboundVoteRequestQueue,
       appendResponseQueue,
       appendEntriesQueue,
-      outboundQueue,
-      log
+      outboundQueue
     )
+  }
+
+  case class VolatileState[T](raftNode: TRef[RaftNode])
+
+  object VolatileState {
+    private val DefaultQueueSize = 100
+
+    def default[T]: UIO[VolatileState[T]] = apply(RaftNode.newUniqueId, Set.empty)
+
+    def apply[T](
+      nodeId: RaftNode.Id,
+      peers: Set[RaftNode.Id]
+    ): UIO[VolatileState[T]] = for {
+      node <- TRef.makeCommit(RaftNode.initial(nodeId, peers))
+    } yield VolatileState(node)
   }
 
   val LeaderHeartbeat = 50.milliseconds
 
-  def default[T]: UIO[Raft[T]] = {
+  def default[T](storage: Storage[T]): UIO[Raft[T]] = {
     val id = RaftNode.newUniqueId
-    State[T](id, Set.empty[RaftNode.Id]).map(d => new Raft[T](id, d))
+    for {
+      state  <- VolatileState[T](id, Set.empty[RaftNode.Id])
+      queues <- MessageQueues.default[T]
+    } yield new Raft[T](id, state, storage, queues)
   }
 
-  def apply[T](nodeId: RaftNode.Id, peers: Set[RaftNode.Id]) =
-    State[T](nodeId, peers).map(state => new Raft(nodeId, state))
+  def apply[T](nodeId: RaftNode.Id, peers: Set[RaftNode.Id], storage: Storage[T]) = for {
+    state  <- VolatileState[T](nodeId, peers)
+    queues <- MessageQueues.default[T]
+  } yield new Raft[T](nodeId, state, storage, queues)
 
 }

@@ -10,6 +10,14 @@ import zio.duration._
 import com.ariskk.raft.model._
 import Message._
 
+/**
+ * Relays messages between Raft nodes to allow for quick in-memory leader election
+ * and command submission testing.
+ * By passing `chaos = true`, one can emulate a faulty network where
+ * messages are reordered, dropped and delayed arbitrarily.
+ * The implementation is non-deterministic on purpose as the algorithm must 
+ * converge at all times.
+ */
 final class TestCluster[T](nodeRef: TRef[Seq[Raft[T]]], chaos: Boolean) {
 
   def getNode(id: RaftNode.Id) = for {
@@ -27,7 +35,7 @@ final class TestCluster[T](nodeRef: TRef[Seq[Raft[T]]], chaos: Boolean) {
 
   def addNewPeer: RIO[Clock, RaftNode.Id] = for {
     nodeIds <- getNodes.map(_.map(_.nodeId))
-    newNode <- Raft[T](RaftNode.newUniqueId, nodeIds.toSet)
+    newNode <- TestRaft[T](RaftNode.newUniqueId, nodeIds.toSet)
     _       <- newNode.run.fork
     _       <- nodeRef.update(_ :+ newNode).commit
   } yield newNode.nodeId
@@ -81,7 +89,7 @@ object TestCluster {
     val nodeIds = (1 to numberOfNodes).map(_ => RaftNode.newUniqueId).toSet
 
     for {
-      nodes   <- ZIO.collectAll(nodeIds.map(id => Raft[T](id, nodeIds - id)))
+      nodes   <- ZIO.collectAll(nodeIds.map(id => TestRaft[T](id, nodeIds - id)))
       nodeRef <- TRef.makeCommit(nodes.toSeq)
     } yield new TestCluster[T](nodeRef, chaos)
   }
