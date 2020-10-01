@@ -11,10 +11,13 @@ import com.ariskk.raft.model._
  * For more info, look at Figure 2 of https://raft.github.io/raft.pdf
  */
 trait Storage[T] {
+  def log: Log[T]
 
-  def appendEntry(entry: LogEntry[T]): STM[StorageException, Unit]
+  def appendEntry(entry: LogEntry[T]): STM[StorageException, Unit] = log.append(entry)
 
-  def logSize: STM[StorageException, Long]
+  def getEntry(index: Index): STM[StorageException, Option[LogEntry[T]]] = log.getEntry(index)
+
+  def logSize: STM[StorageException, Long] = log.size
 
   def storeVote(vote: Vote): STM[StorageException, Unit]
 

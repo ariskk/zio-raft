@@ -45,6 +45,7 @@ object Message {
     to: NodeId,
     appendId: AppendEntries.Id,
     term: Term,
+    entriesSize: Int,
     success: Boolean
   ) extends Message
 

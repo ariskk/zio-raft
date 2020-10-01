@@ -57,8 +57,8 @@ final class VolatileState(
   } yield ()
 
   def hasLost(term: Term) = for {
-    vr          <- votesRejected.toList
-    peers       <- peerList
+    vr    <- votesRejected.toList
+    peers <- peerList
     rejections = vr.filter(_.term == term)
   } yield 2 * rejections.size > peers.size + 1
 

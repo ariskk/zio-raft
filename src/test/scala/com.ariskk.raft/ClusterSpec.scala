@@ -26,10 +26,10 @@ object ClusterSpec extends DefaultRunnableSpec {
       lazy val program = for {
         cluster <- TestCluster.applyUnit(numberOfNodes = 3)
         fiber   <- live(cluster.run.fork)
-        states  <- cluster.getNodeStates.repeatUntil { ns =>
+        states <- cluster.getNodeStates.repeatUntil { ns =>
           sameState(ns.toSeq, Seq(Leader, Follower, Follower))
         }
-        _       <- fiber.interrupt
+        _ <- fiber.interrupt
       } yield ()
 
       assertM(program)(equalTo(()))

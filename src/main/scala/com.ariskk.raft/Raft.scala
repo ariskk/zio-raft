@@ -151,10 +151,10 @@ final class Raft[T](
     currentVote <- storage.getVote
     _ <-
       if (voteRequest.term.isAfter(currentTerm))
-        state.becomeFollower *> 
+        state.becomeFollower *>
           storage.storeTerm(voteRequest.term) *>
-            storage.storeVote(Vote(voteRequest.from, voteRequest.term)) *>
-              sendVoteResponse(voteRequest, granted = true)
+          storage.storeVote(Vote(voteRequest.from, voteRequest.term)) *>
+          sendVoteResponse(voteRequest, granted = true)
       else if (
         voteRequest.term == currentTerm &&
         (currentVote.isEmpty || currentVote.contains(Vote(voteRequest.from, currentTerm)))
@@ -168,14 +168,33 @@ final class Raft[T](
     .flatMap(proccessVoteRequest)
     .forever
 
+  private def shouldAppend(previousIndex: Index, previousTerm: Term) =
+    if (previousIndex.index == -1) STM.succeed(true)
+    else
+      for {
+        size <- storage.logSize
+        term <- storage.getEntry(previousIndex).map(_.map(_.term).getOrElse(Term.Invalid))
+      } yield previousIndex.index < size && previousTerm == term
+
+  private def appendLog(ae: AppendEntries[T]) = for {
+    shouldAppend <- shouldAppend(ae.prevLogIndex, ae.prevLogTerm)
+    _            <- if (shouldAppend) STM.succeed(true) else STM.die(InvalidStateException("Shouldn't happen"))
+  } yield ()
+
   private def processEntries(ae: AppendEntries[T]) = (for {
-    currentTerm <- storage.getTerm
+    currentTerm  <- storage.getTerm
+    currentState <- state.nodeState
     term <-
       if (ae.term.isAfter(currentTerm))
         storage.storeTerm(ae.term) *>
-          state.becomeFollower.map(_ => ae.term)
+          state.becomeFollower *>
+          appendLog(ae).map(_ => ae.term)
+      else if (ae.term == currentTerm && currentState != NodeState.Follower)
+        state.becomeFollower *> appendLog(ae).map(_ => ae.term)
       else STM.succeed(currentTerm)
-    _ <- sendMessage(AppendEntriesResponse(ae.to, ae.from, ae.appendId, term, success = true))
+    success     = term == ae.term
+    entriesSize = if (success) ae.entries.size else 0
+    _ <- sendMessage(AppendEntriesResponse(ae.to, ae.from, ae.appendId, term, entriesSize, success = success))
   } yield ()).commit
 
   private def processInboundEntries: ZIO[Clock, StorageException, Unit] =
