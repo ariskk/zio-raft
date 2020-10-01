@@ -15,7 +15,7 @@ import NodeState.{ Follower, Leader }
  */
 object ClusterSpec extends DefaultRunnableSpec {
 
-  override def aspects = List(TestAspect.timeout(10.seconds))
+  override def aspects = List(TestAspect.timeout(2.seconds))
 
   private def sameState(s1: Seq[NodeState], s2: Seq[NodeState]): Boolean =
     s1.diff(s2).isEmpty && s2.diff(s1).isEmpty
@@ -26,7 +26,9 @@ object ClusterSpec extends DefaultRunnableSpec {
       lazy val program = for {
         cluster <- TestCluster.applyUnit(numberOfNodes = 3)
         fiber   <- live(cluster.run.fork)
-        states  <- cluster.getNodeStates.repeatUntil(ns => sameState(ns.toSeq, Seq(Leader, Follower, Follower)))
+        states  <- cluster.getNodeStates.repeatUntil { ns =>
+          sameState(ns.toSeq, Seq(Leader, Follower, Follower))
+        }
         _       <- fiber.interrupt
       } yield ()
 
@@ -52,9 +54,10 @@ object ClusterSpec extends DefaultRunnableSpec {
         fiber   <- live(cluster.run.fork)
         states  <- cluster.getNodeStates.repeatUntil(ns => sameState(ns.toSeq, Seq(Follower, Follower, Leader)))
         _       <- cluster.addNewPeer
-        states <- cluster.getNodeStates.repeatUntil(ns =>
+        states <- cluster.getNodeStates.repeatUntil { ns =>
+          println(ns)
           sameState(ns.toSeq, Seq(Follower, Follower, Follower, Leader))
-        )
+        }
         _ <- fiber.interrupt
       } yield ()
 

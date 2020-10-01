@@ -3,22 +3,22 @@ package com.ariskk.raft.model
 import com.ariskk.raft.utils.Utils
 
 sealed trait Message {
-  def from: RaftNode.Id
-  def to: RaftNode.Id
+  def from: NodeId
+  def to: NodeId
   def term: Term
 }
 
 object Message {
 
   final case class VoteRequest(
-    from: RaftNode.Id,
-    to: RaftNode.Id,
+    from: NodeId,
+    to: NodeId,
     term: Term
   ) extends Message
 
   final case class VoteResponse(
-    from: RaftNode.Id,
-    to: RaftNode.Id,
+    from: NodeId,
+    to: NodeId,
     term: Term,
     granted: Boolean
   ) extends Message
@@ -31,8 +31,8 @@ object Message {
 
   final case class AppendEntries[T](
     appendId: AppendEntries.Id,
-    from: RaftNode.Id,
-    to: RaftNode.Id,
+    from: NodeId,
+    to: NodeId,
     term: Term,
     prevLogIndex: Index,
     prevLogTerm: Term,
@@ -41,8 +41,8 @@ object Message {
   ) extends Message
 
   final case class AppendEntriesResponse(
-    from: RaftNode.Id,
-    to: RaftNode.Id,
+    from: NodeId,
+    to: NodeId,
     appendId: AppendEntries.Id,
     term: Term,
     success: Boolean

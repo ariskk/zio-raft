@@ -21,17 +21,6 @@ object RaftSpec extends DefaultRunnableSpec {
 
       assertM(program)(equalTo(NodeState.Follower))
     },
-    testM("It should be able to become a candidate") {
-
-      lazy val program = for {
-        raft  <- TestRaft[Unit](RaftNode.newUniqueId, Set(RaftNode.newUniqueId))
-        _     <- raft.becomeCandidate.commit
-        state <- raft.nodeState
-      } yield state
-
-      assertM(program)(equalTo(NodeState.Candidate))
-
-    },
     testM("It should become leader if it runs alone") {
 
       lazy val program = for {
@@ -58,17 +47,17 @@ object RaftSpec extends DefaultRunnableSpec {
     },
     testM("It should be able to add and remove peers") {
 
-      val newPeer = RaftNode.newUniqueId
+      val newPeer = NodeId.newUniqueId
 
       lazy val program = for {
         raft             <- TestRaft.default[Unit]
         _                <- raft.addPeer(newPeer)
-        peersWithNewPeer <- raft.node.map(_.peers)
+        peersWithNewPeer <- raft.peers.commit
         _                <- raft.removePeer(newPeer)
-        peersWithout     <- raft.node.map(_.peers)
+        peersWithout     <- raft.peers.commit
       } yield (peersWithNewPeer, peersWithout)
 
-      assertM(program)(equalTo((Set(newPeer), Set.empty[RaftNode.Id])))
+      assertM(program)(equalTo((List(newPeer), List.empty[NodeId])))
 
     }
   )

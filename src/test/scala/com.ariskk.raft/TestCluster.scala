@@ -15,12 +15,12 @@ import Message._
  * and command submission testing.
  * By passing `chaos = true`, one can emulate a faulty network where
  * messages are reordered, dropped and delayed arbitrarily.
- * The implementation is non-deterministic on purpose as the algorithm must 
+ * The implementation is non-deterministic on purpose as the algorithm must
  * converge at all times.
  */
 final class TestCluster[T](nodeRef: TRef[Seq[Raft[T]]], chaos: Boolean) {
 
-  def getNode(id: RaftNode.Id) = for {
+  def getNode(id: NodeId) = for {
     nodes <- nodeRef.get.commit
     node  <- ZIO.fromOption(nodes.find(_.nodeId == id))
   } yield node
@@ -29,13 +29,13 @@ final class TestCluster[T](nodeRef: TRef[Seq[Raft[T]]], chaos: Boolean) {
 
   def getNodeStates: UIO[Iterable[NodeState]] = for {
     nodes    <- nodeRef.get.commit
-    nodeData <- ZIO.collectAll(nodes.map(_.node))
-    states = nodeData.map(_.state)
-  } yield states
+    nodeData <- ZIO.collectAll(nodes.map(_.nodeState))
+  } yield nodeData
 
-  def addNewPeer: RIO[Clock, RaftNode.Id] = for {
-    nodeIds <- getNodes.map(_.map(_.nodeId))
-    newNode <- TestRaft[T](RaftNode.newUniqueId, nodeIds.toSet)
+  def addNewPeer: RIO[Clock, NodeId] = for {
+    nodes    <- nodeRef.get.commit
+    newNode <- TestRaft[T](NodeId.newUniqueId, nodes.map(_.nodeId).toSet)
+    _       <- ZIO.collectAll(nodes.map(_.addPeer(newNode.nodeId))) 
     _       <- newNode.run.fork
     _       <- nodeRef.update(_ :+ newNode).commit
   } yield newNode.nodeId
@@ -86,7 +86,7 @@ final class TestCluster[T](nodeRef: TRef[Seq[Raft[T]]], chaos: Boolean) {
 object TestCluster {
 
   def apply[T](numberOfNodes: Int, chaos: Boolean = false): UIO[TestCluster[T]] = {
-    val nodeIds = (1 to numberOfNodes).map(_ => RaftNode.newUniqueId).toSet
+    val nodeIds = (1 to numberOfNodes).map(_ => NodeId.newUniqueId).toSet
 
     for {
       nodes   <- ZIO.collectAll(nodeIds.map(id => TestRaft[T](id, nodeIds - id)))

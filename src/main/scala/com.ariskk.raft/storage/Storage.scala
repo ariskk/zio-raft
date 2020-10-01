@@ -16,9 +16,9 @@ trait Storage[T] {
 
   def logSize: STM[StorageException, Long]
 
-  def storeVote(node: RaftNode.Id): STM[StorageException, Unit]
+  def storeVote(vote: Vote): STM[StorageException, Unit]
 
-  def getVote: STM[StorageException, Option[RaftNode.Id]]
+  def getVote: STM[StorageException, Option[Vote]]
 
   def storeTerm(term: Term): STM[StorageException, Unit]
 

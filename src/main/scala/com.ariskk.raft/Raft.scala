@@ -7,7 +7,8 @@ import zio.clock._
 
 import com.ariskk.raft.model._
 import Message._
-import Raft.{ MessageQueues, VolatileState }
+import Raft.{ MessageQueues }
+import com.ariskk.raft.state.VolatileState
 import com.ariskk.raft.storage.Storage
 
 /**
@@ -16,8 +17,8 @@ import com.ariskk.raft.storage.Storage
  * Communication with the outside world is asynchronous; all messages are fire and forget.
  */
 final class Raft[T](
-  val nodeId: RaftNode.Id,
-  state: VolatileState[T],
+  val nodeId: NodeId,
+  state: VolatileState,
   storage: Storage[T],
   queues: MessageQueues[T]
 ) {
@@ -34,9 +35,9 @@ final class Raft[T](
 
   def offerVoteRequest(request: VoteRequest) = queues.inboundVoteRequestQueue.offer(request).commit
 
-  def addPeer(peer: RaftNode.Id) = state.raftNode.update(_.addPeer(peer)).commit
+  def addPeer(peer: NodeId) = state.addPeer(peer).commit
 
-  def removePeer(peer: RaftNode.Id) = state.raftNode.update(_.removePeer(peer)).commit
+  def removePeer(peer: NodeId) = state.removePeer(peer).commit
 
   private[raft] def sendMessage(m: Message): USTM[Unit] =
     queues.outboundQueue.offer(m).unit
@@ -44,40 +45,40 @@ final class Raft[T](
   private[raft] def sendMessages(ms: Iterable[Message]): USTM[Unit] =
     queues.outboundQueue.offerAll(ms).unit
 
-  private[raft] def becomeCandidate: USTM[RaftNode] = state.raftNode.updateAndGet(_.stand)
+  private[raft] def nodeState: UIO[NodeState] = state.nodeState.commit
 
-  private[raft] def node: UIO[RaftNode] = state.raftNode.get.commit
+  private[raft] def isLeader: UIO[Boolean] = state.isLeader.commit
 
-  private[raft] def nodeState: UIO[NodeState] = state.raftNode.get.commit.map(_.state)
-
-  private[raft] def isLeader: UIO[Boolean] = state.raftNode.get.commit.map(_.isLeader)
+  private[raft] def peers = state.peerList
 
   /**
    * Collects the acknowledgements as they come. Steps down if it finds a later term.
    * Sends heartbeats every 50 milliseconds until it steps down.
    */
-  private def sendHeartbeats: RIO[Clock, Unit] = {
+  private def sendHeartbeats: ZIO[Clock, StorageException, Unit] = {
     lazy val collectAcks = queues.appendResponseQueue.takeAll.commit.flatMap { acks =>
       for {
-        currentNode <- state.raftNode.get.commit
+        currentTerm <- storage.getTerm.commit
         maxTerm = acks.map(_.term.term).maxOption
-        _ <- maxTerm.fold(ZIO.unit) { mx =>
-          if (mx > currentNode.term.term)
-            state.raftNode.update(_.becomeFollower(Term(mx))).commit
-          else ZIO.unit
+        _ <- maxTerm.fold[ZIO[Clock, StorageException, Unit]](IO.unit) { mx =>
+          if (mx > currentTerm.term)
+            (storage.storeTerm(Term(mx)) <*
+              state.becomeFollower).commit
+          else IO.unit
         }
       } yield ()
     }.repeatWhileM(_ => isLeader)
 
-    lazy val sendHeartbeatEntries = state.raftNode.get.commit.flatMap { currentNode =>
-      sendMessages(
-        currentNode.peers.map(p =>
+    lazy val sendHeartbeatEntries = (for {
+      currentTerm <- storage.getTerm.commit
+      peers       <- state.peerList.commit
+      _ <- sendMessages(
+        peers.map(p =>
           AppendEntries[T](
             AppendEntries.newUniqueId,
-            currentNode.id,
+            state.nodeId,
             p,
-            currentNode.term,
-            // todo implement
+            currentTerm,
             prevLogIndex = Index(-1),
             prevLogTerm = Term(-1),
             leaderCommitIndex = Index(-1),
@@ -85,32 +86,31 @@ final class Raft[T](
           )
         )
       ).commit
-    }.delay(Raft.LeaderHeartbeat).repeatWhileM(_ => isLeader)
+
+    } yield ()).delay(Raft.LeaderHeartbeat).repeatWhileM(_ => isLeader)
 
     (collectAcks &> sendHeartbeatEntries) *> processInboundEntries
 
   }
 
-  private def sendVoteRequests(candidate: RaftNode): USTM[Unit] = {
-    val requests = candidate.peers.map(p => VoteRequest(candidate.id, p, candidate.term))
-    sendMessages(requests)
-  }
+  private def sendVoteRequests: STM[StorageException, Unit] = for {
+    peers <- state.peerList
+    term  <- storage.getTerm
+    requests = peers.map(p => VoteRequest(state.nodeId, p, term))
+    _ <- sendMessages(requests)
+  } yield ()
 
   private def collectVotes(forTerm: Term) = {
     lazy val voteCollectionProgram = for {
-      newVote     <- queues.inboundVoteResponseQueue.take
-      currentNode <- state.raftNode.get
+      newVote <- queues.inboundVoteResponseQueue.take
       _ <-
         if (newVote.term.isAfter(forTerm))
-          state.raftNode.update(_.becomeFollower(newVote.term))
+          storage.storeTerm(newVote.term) *>
+            state.becomeFollower
         else if (newVote.term == forTerm && newVote.granted)
-          state.raftNode.set(
-            currentNode.addVote(newVote.from, newVote.term)
-          )
+          state.addVote(Vote(newVote.from, newVote.term))
         else if (newVote.term == forTerm && !newVote.granted)
-          state.raftNode.set(
-            currentNode.addVoteRejection(newVote.from, newVote.term)
-          )
+          state.addVoteRejection(Vote(newVote.from, newVote.term))
         else ZSTM.unit
     } yield ()
 
@@ -118,7 +118,7 @@ final class Raft[T](
       .repeatUntilM(_ => nodeState.map(_ != NodeState.Candidate))
   }
 
-  private def electionResult: ZIO[clock.Clock, Throwable, Unit] = for {
+  private def electionResult: ZIO[clock.Clock, StorageException, Unit] = for {
     state <- nodeState
     _ <- state match {
       case NodeState.Follower => processInboundEntries
@@ -130,11 +130,15 @@ final class Raft[T](
 
   private[raft] def runForLeader = {
     lazy val standForElectionProgram = for {
-      candidate <- becomeCandidate.commit
-      _         <- sendVoteRequests(candidate).commit
-    } yield candidate.term
+      currentTerm <- storage.getTerm
+      newTerm = currentTerm.increment
+      _    <- state.stand(newTerm)
+      _    <- storage.storeTerm(newTerm)
+      _    <- sendVoteRequests
+      term <- storage.getTerm
+    } yield term
 
-    standForElectionProgram.flatMap { term =>
+    standForElectionProgram.commit.flatMap { term =>
       collectVotes(term) *> electionResult
     }
   }
@@ -143,16 +147,19 @@ final class Raft[T](
     sendMessage(VoteResponse(nodeId, voteRequest.from, voteRequest.term, granted))
 
   private def proccessVoteRequest(voteRequest: VoteRequest) = (for {
-    currentNode <- state.raftNode.get
+    currentTerm <- storage.getTerm
+    currentVote <- storage.getVote
     _ <-
-      if (voteRequest.term.isAfter(currentNode.term))
-        state.raftNode.update(_.becomeFollower(voteRequest.term).voteFor(voteRequest.from)) *>
-          sendVoteResponse(voteRequest, granted = true)
+      if (voteRequest.term.isAfter(currentTerm))
+        state.becomeFollower *> 
+          storage.storeTerm(voteRequest.term) *>
+            storage.storeVote(Vote(voteRequest.from, voteRequest.term)) *>
+              sendVoteResponse(voteRequest, granted = true)
       else if (
-        voteRequest.term == currentNode.term &&
-        (currentNode.votedFor.isEmpty || currentNode.votedFor.contains(voteRequest.from))
+        voteRequest.term == currentTerm &&
+        (currentVote.isEmpty || currentVote.contains(Vote(voteRequest.from, currentTerm)))
       )
-        state.raftNode.update(_.voteFor(voteRequest.from)) *>
+        storage.storeVote(Vote(voteRequest.from, currentTerm)) *>
           sendVoteResponse(voteRequest, granted = true)
       else sendVoteResponse(voteRequest, granted = false)
   } yield ()).commit
@@ -162,23 +169,27 @@ final class Raft[T](
     .forever
 
   private def processEntries(ae: AppendEntries[T]) = (for {
-    node <- state.raftNode.get
+    currentTerm <- storage.getTerm
     term <-
-      if (ae.term.isAfter(node.term))
-        state.raftNode.update(_.becomeFollower(ae.term)).map(_ => ae.term)
-      else STM.succeed(node.term)
+      if (ae.term.isAfter(currentTerm))
+        storage.storeTerm(ae.term) *>
+          state.becomeFollower.map(_ => ae.term)
+      else STM.succeed(currentTerm)
     _ <- sendMessage(AppendEntriesResponse(ae.to, ae.from, ae.appendId, term, success = true))
   } yield ()).commit
 
-  private def processInboundEntries: RIO[Clock, Unit] =
+  private def processInboundEntries: ZIO[Clock, StorageException, Unit] =
     queues.appendEntriesQueue.take.commit.disconnect
       .timeout(ElectionTimeout.newTimeout.value.milliseconds)
       .flatMap { maybeEntries =>
-        maybeEntries.fold(
+        maybeEntries.fold[ZIO[Clock, StorageException, Unit]](
           for {
-            node <- state.raftNode.get.commit
+            nodeState   <- state.nodeState.commit
+            currentTerm <- storage.getTerm.commit
+            currentVote <- storage.getVote.commit
+            hasLost     <- state.hasLost(currentTerm).commit
             _ <-
-              if ((node.isFollower && node.votedFor.isEmpty) || node.hasLost(node.term)) runForLeader
+              if ((nodeState == NodeState.Follower && currentVote.isEmpty) || hasLost) runForLeader
               else processInboundEntries
           } yield ()
         )(es => processEntries(es) *> processInboundEntries)
@@ -225,33 +236,18 @@ object Raft {
     )
   }
 
-  case class VolatileState[T](raftNode: TRef[RaftNode])
-
-  object VolatileState {
-    private val DefaultQueueSize = 100
-
-    def default[T]: UIO[VolatileState[T]] = apply(RaftNode.newUniqueId, Set.empty)
-
-    def apply[T](
-      nodeId: RaftNode.Id,
-      peers: Set[RaftNode.Id]
-    ): UIO[VolatileState[T]] = for {
-      node <- TRef.makeCommit(RaftNode.initial(nodeId, peers))
-    } yield VolatileState(node)
-  }
-
   val LeaderHeartbeat = 50.milliseconds
 
   def default[T](storage: Storage[T]): UIO[Raft[T]] = {
-    val id = RaftNode.newUniqueId
+    val id = NodeId.newUniqueId
     for {
-      state  <- VolatileState[T](id, Set.empty[RaftNode.Id])
+      state  <- VolatileState(id, Set.empty[NodeId])
       queues <- MessageQueues.default[T]
     } yield new Raft[T](id, state, storage, queues)
   }
 
-  def apply[T](nodeId: RaftNode.Id, peers: Set[RaftNode.Id], storage: Storage[T]) = for {
-    state  <- VolatileState[T](nodeId, peers)
+  def apply[T](nodeId: NodeId, peers: Set[NodeId], storage: Storage[T]) = for {
+    state  <- VolatileState(nodeId, peers)
     queues <- MessageQueues.default[T]
   } yield new Raft[T](nodeId, state, storage, queues)
 
