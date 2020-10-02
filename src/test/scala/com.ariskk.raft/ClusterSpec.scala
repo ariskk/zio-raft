@@ -46,23 +46,6 @@ object ClusterSpec extends DefaultRunnableSpec {
 
       assertM(program)(equalTo(()))
 
-    },
-    testM("New peers should be able to join a running cluster") {
-
-      lazy val program = for {
-        cluster <- TestCluster.applyUnit(numberOfNodes = 3, chaos = true)
-        fiber   <- live(cluster.run.fork)
-        states  <- cluster.getNodeStates.repeatUntil(ns => sameState(ns.toSeq, Seq(Follower, Follower, Leader)))
-        _       <- cluster.addNewPeer
-        states <- cluster.getNodeStates.repeatUntil { ns =>
-          println(ns)
-          sameState(ns.toSeq, Seq(Follower, Follower, Follower, Leader))
-        }
-        _ <- fiber.interrupt
-      } yield ()
-
-      assertM(program)(equalTo(()))
-
     }
   )
 

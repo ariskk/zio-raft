@@ -32,14 +32,6 @@ final class TestCluster[T](nodeRef: TRef[Seq[Raft[T]]], chaos: Boolean) {
     nodeData <- ZIO.collectAll(nodes.map(_.nodeState))
   } yield nodeData
 
-  def addNewPeer: RIO[Clock, NodeId] = for {
-    nodes   <- nodeRef.get.commit
-    newNode <- TestRaft[T](NodeId.newUniqueId, nodes.map(_.nodeId).toSet)
-    _       <- ZIO.collectAll(nodes.map(_.addPeer(newNode.nodeId)))
-    _       <- newNode.run.fork
-    _       <- nodeRef.update(_ :+ newNode).commit
-  } yield newNode.nodeId
-
   private def sendMessage(m: Message) = for {
     node <- getNode(m.to)
     _ <- m match {
