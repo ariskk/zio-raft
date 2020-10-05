@@ -13,7 +13,9 @@ object Message {
   final case class VoteRequest(
     from: NodeId,
     to: NodeId,
-    term: Term
+    term: Term,
+    lastLogIndex: Index,
+    lastLogTerm: Term
   ) extends Message
 
   final case class VoteResponse(
@@ -37,7 +39,7 @@ object Message {
     prevLogIndex: Index,
     prevLogTerm: Term,
     leaderCommitIndex: Index,
-    entries: Seq[T]
+    entries: Seq[LogEntry[T]]
   ) extends Message
 
   final case class AppendEntriesResponse(
@@ -45,7 +47,8 @@ object Message {
     to: NodeId,
     appendId: AppendEntries.Id,
     term: Term,
-    entriesSize: Int,
+    prevLogIndex: Index,
+    lastInsertedIndex: Index,
     success: Boolean
   ) extends Message
 

@@ -39,6 +39,8 @@ final class Raft[T](
 
   def removePeer(peer: NodeId) = state.removePeer(peer).commit
 
+  private[raft] def getAllEntries = storage.log.getEntries(Index(0))
+
   private[raft] def sendMessage(m: Message): USTM[Unit] =
     queues.outboundQueue.offer(m).unit
 
@@ -51,59 +53,113 @@ final class Raft[T](
 
   private[raft] def peers = state.peerList
 
+  private def sendAppendEntries = for {
+    currentTerm <- storage.getTerm
+    peers       <- state.peerList
+    commitIndex <- state.lastCommitIndex
+    logSize     <- storage.logSize
+    _ <- ZSTM.collectAll(
+      peers.map(p =>
+        for {
+          nextIndex <- state.nextIndexForPeer(p).map(_.getOrElse(Index(0)))
+          previousIndex = if (nextIndex == Index(-1)) nextIndex else nextIndex.decrement
+          previousTerm <-
+            storage.getEntry(previousIndex).map(_.map(_.term).getOrElse(Term(-1)))
+          entries <- storage.getEntries(nextIndex)
+          _ <- sendMessage(
+            AppendEntries[T](
+              AppendEntries.newUniqueId,
+              nodeId,
+              p,
+              currentTerm,
+              prevLogIndex = previousIndex,
+              prevLogTerm = previousTerm,
+              leaderCommitIndex = commitIndex,
+              entries = entries
+            )
+          )
+        } yield ()
+      )
+    )
+  } yield ()
+
+  /**
+   * If there exists an N such that N > commitIndex, a majority
+   * of matchIndex[i] ≥ N, and log[N].term == currentTerm:
+   * set commitIndex = N (§5.3, §5.4).
+   */
+  private def updateCommitIndex = for {
+    term            <- storage.getTerm
+    lastCommitIndex <- state.lastCommitIndex
+    lastIndex       <- storage.lastIndex
+    indices         <- state.matchIndexEntries.map(_.map { case (_, index) => index } :+ lastIndex)
+    maybeMedian = indices.sortBy(_.index).lift(indices.size / 2)
+    _ <- maybeMedian.fold[ZSTM[Any, StorageException, Unit]](ZSTM.unit) { median =>
+      for {
+        logEntry <- storage.getEntry(median)
+        _ <- logEntry.fold[ZSTM[Any, StorageException, Unit]](ZSTM.unit) { entry =>
+          if (entry.term == term && median > lastCommitIndex) state.updateCommitIndex(median)
+          else ZSTM.unit
+        }
+      } yield ()
+    }
+  } yield ()
+
+  /**
+   * AppendEntriesResponses can arrive out of order
+   */
+  private def handleAppendEntriesResponse(response: AppendEntriesResponse) =
+    if (response.success)
+      state.updateMatchIndex(response.from, response.lastInsertedIndex) *>
+        state.updateNextIndex(response.from, response.lastInsertedIndex.increment) *>
+        updateCommitIndex
+    else state.decrementNextIndex(response.from)
+
+  private def processAppendEntriesResponses = queues.appendResponseQueue.takeAll.commit.flatMap { aers =>
+    for {
+      currentTerm <- storage.getTerm.commit
+      maxTerm = aers.map(_.term.term).maxOption
+      _ <- maxTerm.fold[ZIO[Clock, StorageException, Unit]](IO.unit) { mx =>
+        if (mx > currentTerm.term)
+          (storage.storeTerm(Term(mx)) <*
+            state.becomeFollower).commit
+        // Potential optimisation using collectAllPar
+        else
+          ZIO
+            .collectAll(
+              aers.map(response => handleAppendEntriesResponse(response).commit)
+            )
+            .unit
+      }
+    } yield ()
+  }.repeatWhileM(_ => isLeader)
+
   /**
    * Collects the acknowledgements as they come. Steps down if it finds a later term.
    * Sends heartbeats every 50 milliseconds until it steps down.
    */
-  private def sendHeartbeats: ZIO[Clock, StorageException, Unit] = {
-    lazy val collectAcks = queues.appendResponseQueue.takeAll.commit.flatMap { acks =>
-      for {
-        currentTerm <- storage.getTerm.commit
-        maxTerm = acks.map(_.term.term).maxOption
-        _ <- maxTerm.fold[ZIO[Clock, StorageException, Unit]](IO.unit) { mx =>
-          if (mx > currentTerm.term)
-            (storage.storeTerm(Term(mx)) <*
-              state.becomeFollower).commit
-          else IO.unit
-        }
-      } yield ()
-    }.repeatWhileM(_ => isLeader)
+  private def sendHeartbeats: ZIO[Clock, RaftException, Unit] = {
 
-    lazy val sendHeartbeatEntries = (for {
-      currentTerm <- storage.getTerm.commit
-      peers       <- state.peerList.commit
-      _ <- sendMessages(
-        peers.map(p =>
-          AppendEntries[T](
-            AppendEntries.newUniqueId,
-            state.nodeId,
-            p,
-            currentTerm,
-            prevLogIndex = Index(-1),
-            prevLogTerm = Term(-1),
-            leaderCommitIndex = Index(-1),
-            entries = Seq.empty
-          )
-        )
-      ).commit
+    lazy val sendHeartbeatEntries = sendAppendEntries.commit
+      .delay(Raft.LeaderHeartbeat)
+      .repeatWhileM(_ => isLeader)
 
-    } yield ()).delay(Raft.LeaderHeartbeat).repeatWhileM(_ => isLeader)
-
-    (collectAcks &> sendHeartbeatEntries) *> processInboundEntries
+    (processAppendEntriesResponses &> sendHeartbeatEntries) *> processInboundEntries
 
   }
 
-  private def sendVoteRequests: STM[StorageException, Unit] = for {
-    peers <- state.peerList
-    term  <- storage.getTerm
-    requests = peers.map(p => VoteRequest(state.nodeId, p, term))
+  private def sendVoteRequests(term: Term): STM[StorageException, Unit] = for {
+    peers     <- state.peerList
+    lastIndex <- storage.lastIndex
+    lastTerm  <- storage.lastEntry.map(_.map(_.term).getOrElse(Term(-1)))
+    requests = peers.map(p => VoteRequest(state.nodeId, p, term, lastIndex, lastTerm))
     _ <- sendMessages(requests)
   } yield ()
 
   private def collectVotes(forTerm: Term) = {
     lazy val voteCollectionProgram = for {
-      newVote <- queues.inboundVoteResponseQueue.take
-      _ <-
+      newVote <- queues.inboundVoteResponseQueue.take.commit
+      processVote =
         if (newVote.term.isAfter(forTerm))
           storage.storeTerm(newVote.term) *>
             state.becomeFollower
@@ -112,13 +168,14 @@ final class Raft[T](
         else if (newVote.term == forTerm && !newVote.granted)
           state.addVoteRejection(Vote(newVote.from, newVote.term))
         else ZSTM.unit
+      _ <- processVote.commit
     } yield ()
 
-    voteCollectionProgram.commit
+    voteCollectionProgram
       .repeatUntilM(_ => nodeState.map(_ != NodeState.Candidate))
   }
 
-  private def electionResult: ZIO[clock.Clock, StorageException, Unit] = for {
+  private def electionResult: ZIO[clock.Clock, RaftException, Unit] = for {
     state <- nodeState
     _ <- state match {
       case NodeState.Follower => processInboundEntries
@@ -132,11 +189,11 @@ final class Raft[T](
     lazy val standForElectionProgram = for {
       currentTerm <- storage.getTerm
       newTerm = currentTerm.increment
-      _    <- state.stand(newTerm)
-      _    <- storage.storeTerm(newTerm)
-      _    <- sendVoteRequests
-      term <- storage.getTerm
-    } yield term
+      _ <- state.stand(newTerm)
+      _ <- storage.storeTerm(newTerm)
+      _ <- storage.storeVote(Vote(nodeId, newTerm))
+      _ <- sendVoteRequests(newTerm)
+    } yield newTerm
 
     standForElectionProgram.commit.flatMap { term =>
       collectVotes(term) *> electionResult
@@ -147,8 +204,7 @@ final class Raft[T](
     sendMessage(VoteResponse(nodeId, voteRequest.from, voteRequest.term, granted))
 
   private def proccessVoteRequest(voteRequest: VoteRequest) = (for {
-    currentTerm <- storage.getTerm
-    currentVote <- storage.getVote
+    (currentTerm, currentVote) <- storage.getTerm <*> storage.getVote
     _ <-
       if (voteRequest.term.isAfter(currentTerm))
         state.becomeFollower *>
@@ -164,7 +220,7 @@ final class Raft[T](
       else sendVoteResponse(voteRequest, granted = false)
   } yield ()).commit
 
-  private def processInboundVoteRequests = queues.inboundVoteRequestQueue.take.commit
+  private def processInboundVoteRequests: ZIO[Clock, RaftException, Unit] = queues.inboundVoteRequestQueue.take.commit
     .flatMap(proccessVoteRequest)
     .forever
 
@@ -174,34 +230,68 @@ final class Raft[T](
       for {
         size <- storage.logSize
         term <- storage.getEntry(previousIndex).map(_.map(_.term).getOrElse(Term.Invalid))
-      } yield previousIndex.index < size && previousTerm == term
 
-  private def appendLog(ae: AppendEntries[T]) = for {
-    shouldAppend <- shouldAppend(ae.prevLogIndex, ae.prevLogTerm)
-    _            <- if (shouldAppend) STM.succeed(true) else STM.die(InvalidStateException("Shouldn't happen"))
-  } yield ()
+      } yield previousTerm == term
+
+  /**
+   * TODO
+   *  If an existing entry conflicts with a new one (same index
+   *    but different terms), delete the existing entry and all that
+   *    follow it (§5.3) also commit index and lastApplied
+   */
+  private def appendLog(ae: AppendEntries[T]) =
+    shouldAppend(ae.prevLogIndex, ae.prevLogTerm).flatMap { shouldAppend =>
+      if (shouldAppend) for {
+        _             <- storage.appendEntries(ae.entries.toList)
+        currentCommit <- state.lastCommitIndex
+        _ <-
+          if (ae.leaderCommitIndex > currentCommit)
+            storage.logSize.flatMap { size =>
+              state.updateCommitIndex(Index(math.min(size - 1, ae.leaderCommitIndex.index)))
+            }
+          else STM.unit
+      } yield ()
+      else STM.unit
+    }
 
   private def processEntries(ae: AppendEntries[T]) = (for {
     currentTerm  <- storage.getTerm
     currentState <- state.nodeState
-    term <-
+    lastIndex    <- storage.logSize.map(x => Index(x - 1))
+    (success, term) <-
       if (ae.term.isAfter(currentTerm))
         storage.storeTerm(ae.term) *>
           state.becomeFollower *>
-          appendLog(ae).map(_ => ae.term)
+          state.setLeader(ae.from) *>
+          appendLog(ae).map(_ => (true, ae.term))
       else if (ae.term == currentTerm && currentState != NodeState.Follower)
-        state.becomeFollower *> appendLog(ae).map(_ => ae.term)
-      else STM.succeed(currentTerm)
-    success     = term == ae.term
-    entriesSize = if (success) ae.entries.size else 0
-    _ <- sendMessage(AppendEntriesResponse(ae.to, ae.from, ae.appendId, term, entriesSize, success = success))
+        state.becomeFollower *>
+          state.setLeader(ae.from) *>
+          appendLog(ae).map(_ => (true, ae.term))
+      else if (ae.term == currentTerm && currentState == NodeState.Follower)
+        state.setLeader(ae.from) *>
+          appendLog(ae).map(_ => (true, ae.term))
+      else if (currentTerm.isAfter(ae.term)) STM.succeed((false, currentTerm))
+      else STM.fail(InvalidStateException("Unknown state. This is likely a bug."))
+    updatedLastIndex <- storage.logSize.map(x => Index(x - 1))
+    _ <- sendMessage(
+      AppendEntriesResponse(
+        ae.to,
+        ae.from,
+        ae.appendId,
+        term,
+        lastIndex,
+        updatedLastIndex,
+        success = success
+      )
+    )
   } yield ()).commit
 
-  private def processInboundEntries: ZIO[Clock, StorageException, Unit] =
+  private def processInboundEntries: ZIO[Clock, RaftException, Unit] =
     queues.appendEntriesQueue.take.commit.disconnect
       .timeout(ElectionTimeout.newTimeout.value.milliseconds)
       .flatMap { maybeEntries =>
-        maybeEntries.fold[ZIO[Clock, StorageException, Unit]](
+        maybeEntries.fold[ZIO[Clock, RaftException, Unit]](
           for {
             nodeState   <- state.nodeState.commit
             currentTerm <- storage.getTerm.commit
@@ -218,6 +308,32 @@ final class Raft[T](
     processInboundVoteRequests <&> processInboundEntries
 
   def run = runFollowerLoop
+
+  private def processCommand(command: T) = {
+    lazy val processCommandProgram = for {
+      term    <- storage.getTerm
+      _       <- storage.appendEntry(LogEntry(command, term))
+      logSize <- storage.logSize
+
+      // This will be executed on the next heartbeat
+      //_ <- sendAppendEntries
+    } yield logSize
+
+    processCommandProgram.commit.flatMap { logSize =>
+      state.lastCommitIndex.commit
+        .repeatUntil(_.index >= logSize - 1)
+        .map(_ => Committed)
+    }
+  }
+
+  def submitCommand(command: T): ZIO[Clock, RaftException, CommandResponse] =
+    state.leader.commit.flatMap { leader =>
+      leader match {
+        case Some(leaderId) if leaderId == nodeId => processCommand(command)
+        case Some(leaderId) if leaderId != nodeId => ZIO.succeed(Redirect(leaderId))
+        case None                                 => ZIO.fail(LeaderNotFoundException)
+      }
+    }
 
 }
 

@@ -15,7 +15,23 @@ trait Storage[T] {
 
   def appendEntry(entry: LogEntry[T]): STM[StorageException, Unit] = log.append(entry)
 
+  def appendEntries(entries: List[LogEntry[T]]): STM[StorageException, Unit] = ZSTM
+    .collectAll(
+      entries.map(appendEntry)
+    )
+    .unit
+
   def getEntry(index: Index): STM[StorageException, Option[LogEntry[T]]] = log.getEntry(index)
+
+  def getEntries(fromIndex: Index): STM[StorageException, List[LogEntry[T]]] =
+    log.getEntries(fromIndex)
+
+  def lastEntry: STM[StorageException, Option[LogEntry[T]]] = for {
+    size <- logSize
+    last <- getEntry(Index(size - 1))
+  } yield last
+
+  def lastIndex: STM[StorageException, Index] = logSize.map(s => Index(s - 1))
 
   def logSize: STM[StorageException, Long] = log.size
 

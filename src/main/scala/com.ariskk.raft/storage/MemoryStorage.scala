@@ -31,6 +31,8 @@ final class MemoryLog[T](log: TRef[List[LogEntry[T]]]) extends Log[T] {
   def size: STM[StorageException, Long]                       = log.get.map(_.size.toLong)
   def getEntry(index: Index): STM[StorageException, Option[LogEntry[T]]] =
     log.get.map(_.lift(index.index.toInt))
+  def getEntries(fromIndex: Index): STM[StorageException, List[LogEntry[T]]] =
+    log.get.map(_.drop(fromIndex.index.toInt))
 }
 
 object MemoryStorage {

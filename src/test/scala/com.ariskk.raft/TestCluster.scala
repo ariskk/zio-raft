@@ -4,17 +4,17 @@ import scala.util.Random
 
 import zio._
 import zio.stm._
-import zio.clock._
 import zio.duration._
 
 import com.ariskk.raft.model._
 import Message._
 
 /**
- * Relays messages between Raft nodes to allow for quick in-memory leader election
+ * Relays messages between Raft consensus modules to allow for quick in-memory leader election
  * and command submission testing.
  * By passing `chaos = true`, one can emulate a faulty network where
- * messages are reordered, dropped and delayed arbitrarily.
+ * messages are reordered, dropped and delayed arbitrarily. Practically, it 
+ * tries to test safety under non-Byzantine conditions.
  * The implementation is non-deterministic on purpose as the algorithm must
  * converge at all times.
  */
@@ -67,12 +67,28 @@ final class TestCluster[T](nodeRef: TRef[Seq[Raft[T]]], chaos: Boolean) {
       nodes   <- nodeRef.get.commit
       allMsgs <- ZIO.collectAll(nodes.map(_.takeAll)).map(_.flatten)
       msgIOs = if (chaos) networkChaos(allMsgs) else allMsgs.map(sendMessage)
-      _ <- ZIO.collectAll(msgIOs)
+      _ <- ZIO.collectAllPar(msgIOs)
     } yield ()
 
     startNodes <&> program.forever
 
   }
+
+  def submitCommand(command: T) = for {
+    nodes <- getNodes
+    ids = nodes.map(_.nodeId)
+    states <- ZIO.collectAll(nodes.map(_.nodeState))
+    leaderId = ids.zip(states).collect { case (id, state) if state == NodeState.Leader => id }.headOption
+    _ <- ZIO.fromOption(leaderId).flatMap(id =>
+      getNode(id).flatMap(_.submitCommand(command)).unit
+    )
+  } yield ()
+
+  def getAllLogEntries = for {
+    nodes <- getNodes
+    ids = nodes.map(_.nodeId)
+    all <- ZIO.collectAll(nodes.map(_.getAllEntries.commit))
+  } yield (ids, all)
 }
 
 object TestCluster {
