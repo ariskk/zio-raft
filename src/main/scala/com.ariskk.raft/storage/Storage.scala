@@ -33,6 +33,8 @@ trait Storage[T] {
 
   def lastIndex: STM[StorageException, Index] = logSize.map(s => Index(s - 1))
 
+  def purgeFrom(index: Index): STM[StorageException, Unit] = log.purgeFrom(index)
+
   def logSize: STM[StorageException, Long] = log.size
 
   def storeVote(vote: Vote): STM[StorageException, Unit]

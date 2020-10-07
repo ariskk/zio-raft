@@ -46,6 +46,12 @@ final class VolatileState(
 
   def matchIndexEntries = matchIndex.toList
 
+  def initPeerIndices(lastIndex: Index) = for {
+    peers <- peerList
+    _ <- ZSTM.collectAll(peers.map(nextIndex.put(_, lastIndex.increment)))
+    _ <- ZSTM.collectAll(peers.map(matchIndex.put(_, Index(0))))
+  } yield ()
+
   def nodeState = state.get
 
   def addPeer(id: NodeId) = peers.put(id)
@@ -57,7 +63,6 @@ final class VolatileState(
   def becomeLeader = for {
     _ <- state.set(NodeState.Leader)
     _ <- setLeader(nodeId)
-    // todo need to set the indices here
   } yield ()
 
   def setLeader(leaderId: NodeId) = currentLeader.set(Option(leaderId))
@@ -71,7 +76,7 @@ final class VolatileState(
     peers <- peers.toList
     hasMajority = 2 * set.size > peers.size + 1
     _ <- if (hasMajority) becomeLeader else ZSTM.unit
-  } yield ()
+  } yield hasMajority
 
   def addVoteRejection(vote: Vote) = for {
     _     <- votesRejected.retainIf(_.term == vote.term)
@@ -80,7 +85,7 @@ final class VolatileState(
     peers <- peers.toList
     hasLost = 2 * set.size > peers.size + 1
     _ <- if (hasLost) becomeFollower else ZSTM.unit
-  } yield ()
+  } yield hasLost
 
   def hasLost(term: Term) = for {
     vr    <- votesRejected.toList

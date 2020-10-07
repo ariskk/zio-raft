@@ -16,7 +16,7 @@ import NodeState.{ Follower, Leader }
  */
 object ClusterSpec extends DefaultRunnableSpec {
 
-  override def aspects = List(TestAspect.timeout(5.seconds))
+  override def aspects = List(TestAspect.timeout(2.seconds))
 
   private def sameState(s1: Seq[NodeState], s2: Seq[NodeState]): Boolean =
     s1.diff(s2).isEmpty && s2.diff(s1).isEmpty
@@ -28,6 +28,9 @@ object ClusterSpec extends DefaultRunnableSpec {
       sameState(ns.toSeq, (1 to nodes - 1).map(_ => Follower) :+ Leader)
     }
   } yield (cluster, fiber)
+
+  private val unitCommand = WriteCommand[Unit](Key("key"), ())
+  private def intCommand(i: Int) = WriteCommand[Int](Key(s"key$i"), i)
 
   def spec = suite("ClusterSpec")(
     testM("A three node cluster should be able to elect a single leader") {
@@ -52,9 +55,9 @@ object ClusterSpec extends DefaultRunnableSpec {
 
       lazy val program = for {
         (cluster, fiber) <- liveCluster[Unit](3, chaos = false)
-        _ <- cluster.submitCommand(())
+        _ <- cluster.submitCommand(unitCommand)
         _ <- cluster.getAllLogEntries.repeatUntil { case (_, entries) =>
-          entries.map(_.map(_.command)) == Seq(Seq(()), Seq(()), Seq(()))
+          entries.map(_.map(_.command)) == Seq(Seq(unitCommand), Seq(unitCommand), Seq(unitCommand))
         }
         _ <- fiber.interrupt
       } yield ()
@@ -65,8 +68,8 @@ object ClusterSpec extends DefaultRunnableSpec {
 
       lazy val program = for {
         (cluster, fiber) <- liveCluster[Int](3, chaos = false)
-        _ <- ZIO.collectAll((1 to 5).map(i => cluster.submitCommand(i)))
-        correctLog = (1 to 5).toSeq
+        _ <- ZIO.collectAll((1 to 5).map(i => cluster.submitCommand(intCommand(i))))
+        correctLog = (1 to 5).toSeq.map(intCommand)
         _ <- cluster.getAllLogEntries.repeatUntil { case (_, entries) =>
           entries.map(_.map(_.command)) == Seq(correctLog, correctLog, correctLog)
         }
@@ -78,12 +81,16 @@ object ClusterSpec extends DefaultRunnableSpec {
     },
     testM("Order should be preserved even when network is faulty") {
 
+      /**
+       * Two duplicate - out of order entries in 1 node
+      */
+
       lazy val program = for {
         (cluster, fiber) <- liveCluster[Int](3, chaos = true)
-        _ <- ZIO.collectAll((1 to 3).map(i => cluster.submitCommand(i)))
-        correctLog = (1 to 3).toSeq
+        commands = (1 to 3).map(intCommand)
+        _ <- ZIO.collectAll(commands.map(cluster.submitCommand))
         _ <- cluster.getAllLogEntries.repeatUntil { case (_, entries) =>
-          entries.map(_.map(_.command)) == Seq(correctLog, correctLog, correctLog)
+          entries.map(_.map(_.command)) == Seq(commands, commands, commands)
         }
         _ <- fiber.interrupt
       } yield ()

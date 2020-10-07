@@ -10,6 +10,7 @@ import Message._
 import Raft.{ MessageQueues }
 import com.ariskk.raft.state.VolatileState
 import com.ariskk.raft.storage.Storage
+import com.ariskk.raft.statemachine.StateMachine
 
 /**
  * Runs the consensus module of a single Raft Node.
@@ -20,7 +21,8 @@ final class Raft[T](
   val nodeId: NodeId,
   state: VolatileState,
   storage: Storage[T],
-  queues: MessageQueues[T]
+  queues: MessageQueues[T],
+  stateMachine: StateMachine[T]
 ) {
 
   def poll: UIO[Option[Message]] = queues.outboundQueue.poll.commit
@@ -123,7 +125,6 @@ final class Raft[T](
         if (mx > currentTerm.term)
           (storage.storeTerm(Term(mx)) <*
             state.becomeFollower).commit
-        // Potential optimisation using collectAllPar
         else
           ZIO
             .collectAll(
@@ -134,10 +135,6 @@ final class Raft[T](
     } yield ()
   }.repeatWhileM(_ => isLeader)
 
-  /**
-   * Collects the acknowledgements as they come. Steps down if it finds a later term.
-   * Sends heartbeats every 50 milliseconds until it steps down.
-   */
   private def sendHeartbeats: ZIO[Clock, RaftException, Unit] = {
 
     lazy val sendHeartbeatEntries = sendAppendEntries.commit
@@ -164,7 +161,10 @@ final class Raft[T](
           storage.storeTerm(newVote.term) *>
             state.becomeFollower
         else if (newVote.term == forTerm && newVote.granted)
-          state.addVote(Vote(newVote.from, newVote.term))
+          state.addVote(Vote(newVote.from, newVote.term)).flatMap { hasWon =>
+            if (hasWon) storage.lastIndex.flatMap(state.initPeerIndices(_))
+            else ZSTM.unit
+          }
         else if (newVote.term == forTerm && !newVote.granted)
           state.addVoteRejection(Vote(newVote.from, newVote.term))
         else ZSTM.unit
@@ -230,15 +230,10 @@ final class Raft[T](
       for {
         size <- storage.logSize
         term <- storage.getEntry(previousIndex).map(_.map(_.term).getOrElse(Term.Invalid))
+        success = (previousTerm == term) && previousIndex.index == size - 1
+        _ <- if (!success) storage.purgeFrom(previousIndex) else ZSTM.unit
+      } yield success
 
-      } yield previousTerm == term
-
-  /**
-   * TODO
-   *  If an existing entry conflicts with a new one (same index
-   *    but different terms), delete the existing entry and all that
-   *    follow it (§5.3) also commit index and lastApplied
-   */
   private def appendLog(ae: AppendEntries[T]) =
     shouldAppend(ae.prevLogIndex, ae.prevLogTerm).flatMap { shouldAppend =>
       if (shouldAppend) for {
@@ -309,14 +304,11 @@ final class Raft[T](
 
   def run = runFollowerLoop
 
-  private def processCommand(command: T) = {
+  private def processCommand(command: Command[T]) = {
     lazy val processCommandProgram = for {
       term    <- storage.getTerm
       _       <- storage.appendEntry(LogEntry(command, term))
       logSize <- storage.logSize
-
-      // This will be executed on the next heartbeat
-      //_ <- sendAppendEntries
     } yield logSize
 
     processCommandProgram.commit.flatMap { logSize =>
@@ -326,7 +318,10 @@ final class Raft[T](
     }
   }
 
-  def submitCommand(command: T): ZIO[Clock, RaftException, CommandResponse] =
+  /**
+   * Blocks until it gets committed.
+  */
+  def submitCommand(command: Command[T]): ZIO[Clock, RaftException, CommandResponse] =
     state.leader.commit.flatMap { leader =>
       leader match {
         case Some(leaderId) if leaderId == nodeId => processCommand(command)
@@ -373,17 +368,22 @@ object Raft {
 
   val LeaderHeartbeat = 50.milliseconds
 
-  def default[T](storage: Storage[T]): UIO[Raft[T]] = {
+  def default[T](storage: Storage[T], stateMachine: StateMachine[T]): UIO[Raft[T]] = {
     val id = NodeId.newUniqueId
     for {
       state  <- VolatileState(id, Set.empty[NodeId])
       queues <- MessageQueues.default[T]
-    } yield new Raft[T](id, state, storage, queues)
+    } yield new Raft[T](id, state, storage, queues, stateMachine)
   }
 
-  def apply[T](nodeId: NodeId, peers: Set[NodeId], storage: Storage[T]) = for {
+  def apply[T](
+    nodeId: NodeId,
+    peers: Set[NodeId],
+    storage: Storage[T],
+    stateMachine: StateMachine[T]
+  ) = for {
     state  <- VolatileState(nodeId, peers)
     queues <- MessageQueues.default[T]
-  } yield new Raft[T](nodeId, state, storage, queues)
+  } yield new Raft[T](nodeId, state, storage, queues, stateMachine)
 
 }

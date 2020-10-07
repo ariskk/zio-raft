@@ -74,7 +74,7 @@ final class TestCluster[T](nodeRef: TRef[Seq[Raft[T]]], chaos: Boolean) {
 
   }
 
-  def submitCommand(command: T) = for {
+  def submitCommand(command: Command[T]) = for {
     nodes <- getNodes
     ids = nodes.map(_.nodeId)
     states <- ZIO.collectAll(nodes.map(_.nodeState))

@@ -9,4 +9,5 @@ trait Log[T] {
   def size: STM[StorageException, Long]
   def getEntry(index: Index): STM[StorageException, Option[LogEntry[T]]]
   def getEntries(index: Index): STM[StorageException, List[LogEntry[T]]]
+  def purgeFrom(index: Index): STM[StorageException, Unit]
 }
