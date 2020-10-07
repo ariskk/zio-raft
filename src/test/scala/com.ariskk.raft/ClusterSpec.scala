@@ -77,10 +77,6 @@ object ClusterSpec extends DefaultRunnableSpec {
     },
     testM("Order should be preserved even when network is faulty") {
 
-      /**
-       * Two duplicate - out of order entries in 1 node
-       */
-
       lazy val program = for {
         (cluster, fiber) <- liveCluster[Int](3, chaos = true)
         commands = (1 to 3).map(intCommand)
