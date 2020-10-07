@@ -1,43 +1,55 @@
 package com.ariskk.raft.model
 
-// TODO Model fron/to better, those are easy to mess up
+import com.ariskk.raft.utils.Utils
+
 sealed trait Message {
-  def from: RaftNode.Id
-  def to: RaftNode.Id
+  def from: NodeId
+  def to: NodeId
   def term: Term
 }
 
 object Message {
 
   final case class VoteRequest(
-    from: RaftNode.Id,
-    to: RaftNode.Id,
-    term: Term
+    from: NodeId,
+    to: NodeId,
+    term: Term,
+    lastLogIndex: Index,
+    lastLogTerm: Term
   ) extends Message
 
   final case class VoteResponse(
-    from: RaftNode.Id,
-    to: RaftNode.Id,
+    from: NodeId,
+    to: NodeId,
     term: Term,
     granted: Boolean
   ) extends Message
 
-  final case class Heartbeat(
-    from: RaftNode.Id,
-    to: RaftNode.Id,
-    term: Term
+  object AppendEntries {
+    case class Id(value: String) extends AnyVal
+
+    def newUniqueId = Id(Utils.newPrefixedId("append"))
+  }
+
+  final case class AppendEntries[T](
+    appendId: AppendEntries.Id,
+    from: NodeId,
+    to: NodeId,
+    term: Term,
+    prevLogIndex: Index,
+    prevLogTerm: Term,
+    leaderCommitIndex: Index,
+    entries: Seq[LogEntry[T]]
   ) extends Message
 
-  final case class HeartbeatAck(
-    from: RaftNode.Id,
-    to: RaftNode.Id,
-    term: Term
-  ) extends Message
-
-  final case class AppendEntries(
-    from: RaftNode.Id,
-    to: RaftNode.Id,
-    term: Term
+  final case class AppendEntriesResponse(
+    from: NodeId,
+    to: NodeId,
+    appendId: AppendEntries.Id,
+    term: Term,
+    prevLogIndex: Index,
+    lastInsertedIndex: Index,
+    success: Boolean
   ) extends Message
 
 }

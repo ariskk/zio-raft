@@ -6,5 +6,6 @@ final case class Term(term: Long) extends AnyVal {
 }
 
 object Term {
-  lazy val Zero = Term(0)
+  lazy val Zero    = Term(0)
+  lazy val Invalid = Term(Long.MinValue)
 }
