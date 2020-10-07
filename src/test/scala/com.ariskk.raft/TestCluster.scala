@@ -13,7 +13,7 @@ import Message._
  * Relays messages between Raft consensus modules to allow for quick in-memory leader election
  * and command submission testing.
  * By passing `chaos = true`, one can emulate a faulty network where
- * messages are reordered, dropped and delayed arbitrarily. Practically, it 
+ * messages are reordered, dropped and delayed arbitrarily. Practically, it
  * tries to test safety under non-Byzantine conditions.
  * The implementation is non-deterministic on purpose as the algorithm must
  * converge at all times.
@@ -79,9 +79,7 @@ final class TestCluster[T](nodeRef: TRef[Seq[Raft[T]]], chaos: Boolean) {
     ids = nodes.map(_.nodeId)
     states <- ZIO.collectAll(nodes.map(_.nodeState))
     leaderId = ids.zip(states).collect { case (id, state) if state == NodeState.Leader => id }.headOption
-    _ <- ZIO.fromOption(leaderId).flatMap(id =>
-      getNode(id).flatMap(_.submitCommand(command)).unit
-    )
+    _ <- ZIO.fromOption(leaderId).flatMap(id => getNode(id).flatMap(_.submitCommand(command)).unit)
   } yield ()
 
   def getAllLogEntries = for {

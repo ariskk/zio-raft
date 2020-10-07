@@ -29,24 +29,20 @@ object ClusterSpec extends DefaultRunnableSpec {
     }
   } yield (cluster, fiber)
 
-  private val unitCommand = WriteCommand[Unit](Key("key"), ())
+  private val unitCommand        = WriteCommand[Unit](Key("key"), ())
   private def intCommand(i: Int) = WriteCommand[Int](Key(s"key$i"), i)
 
   def spec = suite("ClusterSpec")(
     testM("A three node cluster should be able to elect a single leader") {
 
-      lazy val program = liveCluster[Unit](3, chaos = false)
-        .flatMap { case (_, fiber) => fiber.interrupt }
-        .unit
+      lazy val program = liveCluster[Unit](3, chaos = false).flatMap { case (_, fiber) => fiber.interrupt }.unit
 
       assertM(program)(equalTo(()))
 
     },
     testM("Even on adverse network conditions") {
 
-      lazy val program = liveCluster[Unit](3, chaos = true)
-        .flatMap { case(_, fiber) => fiber.interrupt }
-        .unit
+      lazy val program = liveCluster[Unit](3, chaos = true).flatMap { case (_, fiber) => fiber.interrupt }.unit
 
       assertM(program)(equalTo(()))
 
@@ -55,7 +51,7 @@ object ClusterSpec extends DefaultRunnableSpec {
 
       lazy val program = for {
         (cluster, fiber) <- liveCluster[Unit](3, chaos = false)
-        _ <- cluster.submitCommand(unitCommand)
+        _                <- cluster.submitCommand(unitCommand)
         _ <- cluster.getAllLogEntries.repeatUntil { case (_, entries) =>
           entries.map(_.map(_.command)) == Seq(Seq(unitCommand), Seq(unitCommand), Seq(unitCommand))
         }
@@ -68,7 +64,7 @@ object ClusterSpec extends DefaultRunnableSpec {
 
       lazy val program = for {
         (cluster, fiber) <- liveCluster[Int](3, chaos = false)
-        _ <- ZIO.collectAll((1 to 5).map(i => cluster.submitCommand(intCommand(i))))
+        _                <- ZIO.collectAll((1 to 5).map(i => cluster.submitCommand(intCommand(i))))
         correctLog = (1 to 5).toSeq.map(intCommand)
         _ <- cluster.getAllLogEntries.repeatUntil { case (_, entries) =>
           entries.map(_.map(_.command)) == Seq(correctLog, correctLog, correctLog)
@@ -83,7 +79,7 @@ object ClusterSpec extends DefaultRunnableSpec {
 
       /**
        * Two duplicate - out of order entries in 1 node
-      */
+       */
 
       lazy val program = for {
         (cluster, fiber) <- liveCluster[Int](3, chaos = true)

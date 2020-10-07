@@ -48,8 +48,8 @@ final class VolatileState(
 
   def initPeerIndices(lastIndex: Index) = for {
     peers <- peerList
-    _ <- ZSTM.collectAll(peers.map(nextIndex.put(_, lastIndex.increment)))
-    _ <- ZSTM.collectAll(peers.map(matchIndex.put(_, Index(0))))
+    _     <- ZSTM.collectAll(peers.map(nextIndex.put(_, lastIndex.increment)))
+    _     <- ZSTM.collectAll(peers.map(matchIndex.put(_, Index(0))))
   } yield ()
 
   def nodeState = state.get

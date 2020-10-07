@@ -320,7 +320,7 @@ final class Raft[T](
 
   /**
    * Blocks until it gets committed.
-  */
+   */
   def submitCommand(command: Command[T]): ZIO[Clock, RaftException, CommandResponse] =
     state.leader.commit.flatMap { leader =>
       leader match {

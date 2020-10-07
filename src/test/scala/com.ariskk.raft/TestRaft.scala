@@ -15,14 +15,14 @@ object TestRaft {
     val id = NodeId.newUniqueId
     for {
       s    <- MemoryStorage.default[T]
-      sm <- KeyValueStore.apply[T]
+      sm   <- KeyValueStore.apply[T]
       raft <- Raft.default[T](s, sm)
     } yield raft
   }
 
   def apply[T](nodeId: NodeId, peers: Set[NodeId]): UIO[Raft[T]] = for {
     s    <- MemoryStorage.default[T]
-    sm <- KeyValueStore.apply[T]
+    sm   <- KeyValueStore.apply[T]
     raft <- Raft[T](nodeId, peers, s, sm)
   } yield raft
 

@@ -6,7 +6,7 @@ import com.ariskk.raft.model._
 
 final class KeyValueStore[T](map: TMap[Key, T]) extends StateMachine[T] {
   override def write(command: WriteCommand[T]) = map.put(command.key, command.value)
-  override def read(command: ReadCommand[T]) = map.get(command.key)
+  override def read(command: ReadCommand[T])   = map.get(command.key)
 }
 
 object KeyValueStore {
