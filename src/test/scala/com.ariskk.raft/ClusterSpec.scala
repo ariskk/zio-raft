@@ -7,6 +7,7 @@ import zio.test.environment._
 import zio._
 
 import com.ariskk.raft.model._
+import com.ariskk.raft.statemachine._
 import NodeState.{ Follower, Leader }
 
 /**
@@ -29,8 +30,8 @@ object ClusterSpec extends DefaultRunnableSpec {
     }
   } yield (cluster, fiber)
 
-  private val unitCommand        = WriteCommand[Unit](Key("key"), ())
-  private def intCommand(i: Int) = WriteCommand[Int](Key(s"key$i"), i)
+  private val unitCommand        = WriteKey[Unit](Key("key"), ())
+  private def intCommand(i: Int) = WriteKey[Int](Key(s"key$i"), i)
 
   def spec = suite("ClusterSpec")(
     testM("A three node cluster should be able to elect a single leader") {
@@ -84,6 +85,46 @@ object ClusterSpec extends DefaultRunnableSpec {
         _ <- cluster.getAllLogEntries.repeatUntil { case (_, entries) =>
           entries.map(_.map(_.command)) == Seq(commands, commands, commands)
         }
+        _ <- fiber.interrupt
+      } yield ()
+
+      assertM(program)(equalTo(()))
+
+    },
+    testM("All committed entries should be applied to the state machine") {
+
+      lazy val program = for {
+        (cluster, fiber) <- liveCluster[Int](3, chaos = false)
+        commands = (1 to 5).map(intCommand)
+        _ <- ZIO.collectAll(commands.map(cluster.submitCommand))
+        _ <- cluster.getAllLogEntries.repeatUntil { case (_, entries) =>
+          entries.map(_.map(_.command)) == (1 to 3).map(_ => commands).toSeq
+        }
+        _ <- ZIO.collectAll(
+          (1 to 5).map(i =>
+            cluster.queryStateMachines(ReadKey(Key(s"key$i"))).repeatUntil { results =>
+              results == Seq(Some(i), Some(i), Some(i))
+            }
+          )
+        )
+        _ <- fiber.interrupt
+      } yield ()
+
+      assertM(program)(equalTo(()))
+
+    },
+    testM("All committed entries should be applied even under faulty network") {
+
+      lazy val program = for {
+        (cluster, fiber) <- liveCluster[Int](3, chaos = true)
+        _                <- ZIO.collectAll((1 to 5).map(intCommand).map(cluster.submitCommand))
+        _ <- ZIO.collectAll(
+          (1 to 5).map(i =>
+            cluster.queryStateMachines(ReadKey(Key(s"key$i"))).repeatUntil { results =>
+              results == Seq(Some(i), Some(i), Some(i))
+            }
+          )
+        )
         _ <- fiber.interrupt
       } yield ()
 

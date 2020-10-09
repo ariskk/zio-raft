@@ -37,7 +37,7 @@ final class TestCluster[T](nodeRef: TRef[Seq[Raft[T]]], chaos: Boolean) {
     _ <- m match {
       case v: VoteRequest           => node.offerVoteRequest(v)
       case v: VoteResponse          => node.offerVote(v)
-      case ae: AppendEntries[T]     => node.offerAppendEntries(ae)
+      case ae: AppendEntries        => node.offerAppendEntries(ae)
       case r: AppendEntriesResponse => node.offerAppendEntriesResponse(r)
       case _                        => ZIO.die(new UnsupportedOperationException("Message type not supported"))
     }
@@ -74,7 +74,7 @@ final class TestCluster[T](nodeRef: TRef[Seq[Raft[T]]], chaos: Boolean) {
 
   }
 
-  def submitCommand(command: Command[T]) = for {
+  def submitCommand(command: WriteCommand) = for {
     nodes <- getNodes
     ids = nodes.map(_.nodeId)
     states <- ZIO.collectAll(nodes.map(_.nodeState))
@@ -87,6 +87,11 @@ final class TestCluster[T](nodeRef: TRef[Seq[Raft[T]]], chaos: Boolean) {
     ids = nodes.map(_.nodeId)
     all <- ZIO.collectAll(nodes.map(_.getAllEntries.commit))
   } yield (ids, all)
+
+  def queryStateMachines(query: ReadCommand) = for {
+    nodes   <- getNodes
+    results <- ZIO.collectAll(nodes.map(_.submitQuery(query)))
+  } yield results
 }
 
 object TestCluster {

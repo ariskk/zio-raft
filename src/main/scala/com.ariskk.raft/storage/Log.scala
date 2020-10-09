@@ -4,10 +4,11 @@ import zio.stm._
 
 import com.ariskk.raft.model._
 
-trait Log[T] {
-  def append(entry: LogEntry[T]): STM[StorageException, Unit]
+trait Log {
+  def append(entry: LogEntry): STM[StorageException, Unit]
   def size: STM[StorageException, Long]
-  def getEntry(index: Index): STM[StorageException, Option[LogEntry[T]]]
-  def getEntries(index: Index): STM[StorageException, List[LogEntry[T]]]
+  def getEntry(index: Index): STM[StorageException, Option[LogEntry]]
+  def getEntries(index: Index): STM[StorageException, List[LogEntry]]
   def purgeFrom(index: Index): STM[StorageException, Unit]
+  def getRange(from: Index, to: Index): STM[StorageException, List[LogEntry]]
 }

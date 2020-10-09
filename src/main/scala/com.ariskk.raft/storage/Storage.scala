@@ -10,23 +10,26 @@ import com.ariskk.raft.model._
  * to stable storage before responding to RPC.
  * For more info, look at Figure 2 of https://raft.github.io/raft.pdf
  */
-trait Storage[T] {
-  def log: Log[T]
+trait Storage {
+  def log: Log
 
-  def appendEntry(entry: LogEntry[T]): STM[StorageException, Unit] = log.append(entry)
+  def appendEntry(entry: LogEntry): STM[StorageException, Unit] = log.append(entry)
 
-  def appendEntries(entries: List[LogEntry[T]]): STM[StorageException, Unit] = ZSTM
+  def appendEntries(entries: List[LogEntry]): STM[StorageException, Unit] = ZSTM
     .collectAll(
       entries.map(appendEntry)
     )
     .unit
 
-  def getEntry(index: Index): STM[StorageException, Option[LogEntry[T]]] = log.getEntry(index)
+  def getEntry(index: Index): STM[StorageException, Option[LogEntry]] = log.getEntry(index)
 
-  def getEntries(fromIndex: Index): STM[StorageException, List[LogEntry[T]]] =
+  def getEntries(fromIndex: Index): STM[StorageException, List[LogEntry]] =
     log.getEntries(fromIndex)
 
-  def lastEntry: STM[StorageException, Option[LogEntry[T]]] = for {
+  def getRange(from: Index, to: Index): STM[StorageException, List[LogEntry]] =
+    log.getRange(from, to)
+
+  def lastEntry: STM[StorageException, Option[LogEntry]] = for {
     size <- logSize
     last <- getEntry(Index(size - 1))
   } yield last

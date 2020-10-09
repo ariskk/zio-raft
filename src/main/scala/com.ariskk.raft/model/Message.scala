@@ -31,7 +31,7 @@ object Message {
     def newUniqueId = Id(Utils.newPrefixedId("append"))
   }
 
-  final case class AppendEntries[T](
+  final case class AppendEntries(
     appendId: AppendEntries.Id,
     from: NodeId,
     to: NodeId,
@@ -39,7 +39,7 @@ object Message {
     prevLogIndex: Index,
     prevLogTerm: Term,
     leaderCommitIndex: Index,
-    entries: Seq[LogEntry[T]]
+    entries: Seq[LogEntry]
   ) extends Message
 
   final case class AppendEntriesResponse(

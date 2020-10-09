@@ -2,9 +2,9 @@ package com.ariskk.raft.model
 
 import com.ariskk.raft.utils.Utils
 
-case class LogEntry[T](
+case class LogEntry(
   id: LogEntry.Id,
-  command: Command[T],
+  command: WriteCommand,
   term: Term
 )
 
@@ -13,7 +13,7 @@ object LogEntry {
 
   def newUniqueId = Id(Utils.newPrefixedId("entry"))
 
-  def apply[T](command: Command[T], term: Term): LogEntry[T] = LogEntry[T](
+  def apply(command: WriteCommand, term: Term): LogEntry = LogEntry(
     newUniqueId,
     command,
     term
