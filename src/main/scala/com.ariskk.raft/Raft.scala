@@ -8,7 +8,7 @@ import zio.clock._
 import com.ariskk.raft.model._
 import Message._
 import Raft.{ MessageQueues }
-import com.ariskk.raft.state.VolatileState
+import com.ariskk.raft.volatile.VolatileState
 import com.ariskk.raft.storage.Storage
 import com.ariskk.raft.statemachine.StateMachine
 
@@ -20,8 +20,8 @@ import com.ariskk.raft.statemachine.StateMachine
 final class Raft[T](
   val nodeId: NodeId,
   state: VolatileState,
-  storage: Storage[T],
-  queues: MessageQueues[T],
+  storage: Storage,
+  queues: MessageQueues,
   stateMachine: StateMachine[T]
 ) {
 
@@ -33,7 +33,7 @@ final class Raft[T](
 
   def offerAppendEntriesResponse(r: AppendEntriesResponse) = queues.appendResponseQueue.offer(r).commit
 
-  def offerAppendEntries(entries: AppendEntries[T]) = queues.appendEntriesQueue.offer(entries).commit
+  def offerAppendEntries(entries: AppendEntries) = queues.appendEntriesQueue.offer(entries).commit
 
   def offerVoteRequest(request: VoteRequest) = queues.inboundVoteRequestQueue.offer(request).commit
 
@@ -69,7 +69,7 @@ final class Raft[T](
             storage.getEntry(previousIndex).map(_.map(_.term).getOrElse(Term(-1)))
           entries <- storage.getEntries(nextIndex)
           _ <- sendMessage(
-            AppendEntries[T](
+            AppendEntries(
               AppendEntries.newUniqueId,
               nodeId,
               p,
@@ -234,7 +234,7 @@ final class Raft[T](
         _ <- if (!success) storage.purgeFrom(previousIndex) else ZSTM.unit
       } yield success
 
-  private def appendLog(ae: AppendEntries[T]) =
+  private def appendLog(ae: AppendEntries) =
     shouldAppend(ae.prevLogIndex, ae.prevLogTerm).flatMap { shouldAppend =>
       if (shouldAppend) for {
         _             <- storage.appendEntries(ae.entries.toList)
@@ -242,14 +242,20 @@ final class Raft[T](
         _ <-
           if (ae.leaderCommitIndex > currentCommit)
             storage.logSize.flatMap { size =>
-              state.updateCommitIndex(Index(math.min(size - 1, ae.leaderCommitIndex.index)))
+              val newCommitIndex = Index(math.min(size - 1, ae.leaderCommitIndex.index))
+              state.updateCommitIndex(newCommitIndex) *>
+                storage.getRange(currentCommit.increment, newCommitIndex).flatMap { entries =>
+                  ZSTM.collectAll(
+                    entries.map(e => stateMachine.write(e.command) *> state.incrementLastApplied)
+                  )
+                }
             }
           else STM.unit
       } yield ()
       else STM.unit
     }
 
-  private def processEntries(ae: AppendEntries[T]) = (for {
+  private def processEntries(ae: AppendEntries) = (for {
     currentTerm  <- storage.getTerm
     currentState <- state.nodeState
     lastIndex    <- storage.logSize.map(x => Index(x - 1))
@@ -304,7 +310,10 @@ final class Raft[T](
 
   def run = runFollowerLoop
 
-  private def processCommand(command: Command[T]) = {
+  private def applyToStateMachine(command: WriteCommand) =
+    stateMachine.write(command) *> state.incrementLastApplied
+
+  private def processCommand(command: WriteCommand) = {
     lazy val processCommandProgram = for {
       term    <- storage.getTerm
       _       <- storage.appendEntry(LogEntry(command, term))
@@ -314,6 +323,7 @@ final class Raft[T](
     processCommandProgram.commit.flatMap { logSize =>
       state.lastCommitIndex.commit
         .repeatUntil(_.index >= logSize - 1)
+        .flatMap(_ => applyToStateMachine(command).commit)
         .map(_ => Committed)
     }
   }
@@ -321,7 +331,7 @@ final class Raft[T](
   /**
    * Blocks until it gets committed.
    */
-  def submitCommand(command: Command[T]): ZIO[Clock, RaftException, CommandResponse] =
+  def submitCommand(command: WriteCommand): ZIO[Clock, RaftException, CommandResponse] =
     state.leader.commit.flatMap { leader =>
       leader match {
         case Some(leaderId) if leaderId == nodeId => processCommand(command)
@@ -330,15 +340,18 @@ final class Raft[T](
       }
     }
 
+  def submitQuery(query: ReadCommand): ZIO[Clock, RaftException, Option[T]] =
+    stateMachine.read(query).commit
+
 }
 
 object Raft {
 
-  case class MessageQueues[T](
+  case class MessageQueues(
     inboundVoteResponseQueue: TQueue[VoteResponse],
     inboundVoteRequestQueue: TQueue[VoteRequest],
     appendResponseQueue: TQueue[AppendEntriesResponse],
-    appendEntriesQueue: TQueue[AppendEntries[T]],
+    appendEntriesQueue: TQueue[AppendEntries],
     outboundQueue: TQueue[Message]
   )
 
@@ -349,13 +362,13 @@ object Raft {
     private def newQueue[T](queueSize: Int) =
       TQueue.bounded[T](queueSize).commit
 
-    def default[T] = apply[T](DefaultQueueSize)
+    def default = apply(DefaultQueueSize)
 
-    def apply[T](queueSize: Int): UIO[MessageQueues[T]] = for {
+    def apply(queueSize: Int): UIO[MessageQueues] = for {
       inboundVoteResponseQueue <- newQueue[VoteResponse](queueSize)
       inboundVoteRequestQueue  <- newQueue[VoteRequest](queueSize)
       appendResponseQueue      <- newQueue[AppendEntriesResponse](queueSize)
-      appendEntriesQueue       <- newQueue[AppendEntries[T]](queueSize)
+      appendEntriesQueue       <- newQueue[AppendEntries](queueSize)
       outboundQueue            <- newQueue[Message](queueSize)
     } yield MessageQueues(
       inboundVoteResponseQueue,
@@ -368,22 +381,22 @@ object Raft {
 
   val LeaderHeartbeat = 50.milliseconds
 
-  def default[T](storage: Storage[T], stateMachine: StateMachine[T]): UIO[Raft[T]] = {
+  def default[T](storage: Storage, stateMachine: StateMachine[T]): UIO[Raft[T]] = {
     val id = NodeId.newUniqueId
     for {
       state  <- VolatileState(id, Set.empty[NodeId])
-      queues <- MessageQueues.default[T]
+      queues <- MessageQueues.default
     } yield new Raft[T](id, state, storage, queues, stateMachine)
   }
 
   def apply[T](
     nodeId: NodeId,
     peers: Set[NodeId],
-    storage: Storage[T],
+    storage: Storage,
     stateMachine: StateMachine[T]
   ) = for {
     state  <- VolatileState(nodeId, peers)
-    queues <- MessageQueues.default[T]
+    queues <- MessageQueues.default
   } yield new Raft[T](nodeId, state, storage, queues, stateMachine)
 
 }

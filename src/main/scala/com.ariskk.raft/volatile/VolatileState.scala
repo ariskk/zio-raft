@@ -1,4 +1,4 @@
-package com.ariskk.raft.state
+package com.ariskk.raft.volatile
 
 import zio.stm._
 import zio.UIO
@@ -51,6 +51,10 @@ final class VolatileState(
     _     <- ZSTM.collectAll(peers.map(nextIndex.put(_, lastIndex.increment)))
     _     <- ZSTM.collectAll(peers.map(matchIndex.put(_, Index(0))))
   } yield ()
+
+  def setLastApplied(index: Index) = lastApplied.set(index)
+
+  def incrementLastApplied = lastApplied.update(_.increment)
 
   def nodeState = state.get
 

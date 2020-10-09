@@ -17,7 +17,6 @@ Feedback always welcome!
 TBD
 
 Missing:
-- Apply commands to the state machine
 - Safety - 5.4 and onwards (see https://raft.github.io/raft.pdf)
 - Memberships
 - RPC. Currently network is emulated in `TestCluster` by introducing non-Byzantine failures to message passing.
