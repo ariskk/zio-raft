@@ -17,8 +17,8 @@ Feedback always welcome!
 TBD
 
 Missing:
-- Safety - 5.4 and onwards (see https://raft.github.io/raft.pdf)
-- Memberships
+- Cluster Memberships
 - RPC. Currently network is emulated in `TestCluster` by introducing non-Byzantine failures to message passing.
 - Persistent storage. Likely RocksDB
+- Snapshots
 - Proven Linearizability (ie using Jepsen)

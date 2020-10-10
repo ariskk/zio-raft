@@ -43,6 +43,9 @@ final class Raft[T](
 
   private[raft] def getAllEntries = storage.log.getEntries(Index(0))
 
+  /** For testing purposes */
+  private[raft] def appendEntry(entry: LogEntry) = storage.appendEntry(entry).commit
+
   private[raft] def sendMessage(m: Message): USTM[Unit] =
     queues.outboundQueue.offer(m).unit
 
@@ -205,8 +208,14 @@ final class Raft[T](
 
   private def proccessVoteRequest(voteRequest: VoteRequest) = (for {
     (currentTerm, currentVote) <- storage.getTerm <*> storage.getVote
+    (lastIndex, lastEntry)     <- storage.lastIndex <*> storage.lastEntry
     _ <-
-      if (voteRequest.term.isAfter(currentTerm))
+      if (
+        lastIndex > voteRequest.lastLogIndex ||
+        (lastIndex == voteRequest.lastLogIndex &&
+          lastEntry.map(_.term).getOrElse(Term(-1)) > voteRequest.lastLogTerm)
+      ) sendVoteResponse(voteRequest, granted = false)
+      else if (voteRequest.term.isAfter(currentTerm))
         state.becomeFollower *>
           storage.storeTerm(voteRequest.term) *>
           storage.storeVote(Vote(voteRequest.from, voteRequest.term)) *>

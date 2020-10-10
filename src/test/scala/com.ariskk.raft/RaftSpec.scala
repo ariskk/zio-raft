@@ -1,13 +1,14 @@
 package com.ariskk.raft
 
-import zio.test.{ DefaultRunnableSpec, _ }
+import zio.test._
 import zio.test.Assertion._
 import zio.duration._
 import zio.test.environment._
 
 import com.ariskk.raft.model._
+import Message._
 
-object RaftSpec extends DefaultRunnableSpec {
+object RaftSpec extends BaseSpec {
 
   override def aspects = List(TestAspect.timeout(3.seconds))
 
@@ -58,6 +59,39 @@ object RaftSpec extends DefaultRunnableSpec {
       } yield (peersWithNewPeer, peersWithout)
 
       assertM(program)(equalTo((List(newPeer), List.empty[NodeId])))
+
+    },
+    testM("It should reject vote requests from out of date nodes") {
+
+      val peer = NodeId.newUniqueId
+
+      lazy val program = for {
+        raft  <- TestRaft.default[Int]
+        fiber <- raft.runFollowerLoop.fork
+        _     <- raft.appendEntry(LogEntry(intCommand(0), Term(1)))
+        _     <- raft.appendEntry(LogEntry(intCommand(1), Term(3)))
+        // Last entry has an older term
+        firstRequest = VoteRequest(peer, raft.nodeId, Term(4), Index(1), Term(2))
+        // Candidate log is smaller than follower log
+        secondRequest = VoteRequest(peer, raft.nodeId, Term(4), Index(0), Term(1))
+        _ <- raft.offerVoteRequest(firstRequest)
+        _ <- raft.poll.repeatUntil { response =>
+          response match {
+            case Some(VoteResponse(_, _, _, granted)) => granted == false
+            case _                                    => false
+          }
+        }
+        _ <- raft.offerVoteRequest(secondRequest)
+        _ <- raft.poll.repeatUntil { response =>
+          response match {
+            case Some(VoteResponse(_, _, _, granted)) => granted == false
+            case _                                    => false
+          }
+        }
+        _ <- fiber.interrupt
+      } yield ()
+
+      assertM(program)(equalTo())
 
     }
   )
