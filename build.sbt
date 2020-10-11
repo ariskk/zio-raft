@@ -25,13 +25,15 @@ lazy val testDepds = Seq(
   "org.scalatest" %% "scalatest" % "3.2.0" % Test
 )
 
+lazy val core = (project in file("core")).settings(
+  libraryDependencies ++= zioDeps ++ testDepds,
+  testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"),
+  scalacOptions ++= List(
+    "-Wunused:imports"
+  ),
+  addCompilerPlugin(scalafixSemanticdb)
+)
+
 lazy val root = (project in file("."))
-  .settings(
-    name := "zio-raft",
-    libraryDependencies ++= zioDeps ++ testDepds,
-    testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"),
-    scalacOptions ++= List(
-      "-Wunused:imports"
-    ),
-    addCompilerPlugin(scalafixSemanticdb)
-  )
+  .settings(name := "zio-raft")
+  .aggregate(core)
