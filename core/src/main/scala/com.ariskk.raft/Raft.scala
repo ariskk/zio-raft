@@ -2,7 +2,6 @@ package com.ariskk.raft
 
 import zio._
 import zio.duration._
-import zio.stm._
 import zio.clock._
 
 import com.ariskk.raft.model._
@@ -25,36 +24,34 @@ final class Raft[T](
   stateMachine: StateMachine[T]
 ) {
 
-  def poll: UIO[Option[Message]] = queues.outboundQueue.poll.commit
+  def poll: UIO[Option[Message]] = queues.outboundQueue.poll
 
-  def takeAll: UIO[Seq[Message]] = queues.outboundQueue.takeAll.commit
+  def takeAll: UIO[Seq[Message]] = queues.outboundQueue.takeAll
 
-  def offerVote(vote: VoteResponse) = queues.inboundVoteResponseQueue.offer(vote).commit
+  def offerVote(vote: VoteResponse) = queues.inboundVoteResponseQueue.offer(vote)
 
-  def offerAppendEntriesResponse(r: AppendEntriesResponse) = queues.appendResponseQueue.offer(r).commit
+  def offerAppendEntriesResponse(r: AppendEntriesResponse) = queues.appendResponseQueue.offer(r)
 
-  def offerAppendEntries(entries: AppendEntries) = queues.appendEntriesQueue.offer(entries).commit
+  def offerAppendEntries(entries: AppendEntries) = queues.appendEntriesQueue.offer(entries)
 
-  def offerVoteRequest(request: VoteRequest) = queues.inboundVoteRequestQueue.offer(request).commit
+  def offerVoteRequest(request: VoteRequest) = queues.inboundVoteRequestQueue.offer(request)
 
-  def addPeer(peer: NodeId) = state.addPeer(peer).commit
+  def addPeer(peer: NodeId) = state.addPeer(peer)
 
-  def removePeer(peer: NodeId) = state.removePeer(peer).commit
+  def removePeer(peer: NodeId) = state.removePeer(peer)
 
   private[raft] def getAllEntries = storage.log.getEntries(Index(0))
 
   /** For testing purposes */
-  private[raft] def appendEntry(entry: LogEntry) = storage.appendEntry(entry).commit
+  private[raft] def appendEntry(index: Index, entry: LogEntry) = storage.appendEntry(index, entry)
 
-  private[raft] def sendMessage(m: Message): USTM[Unit] =
-    queues.outboundQueue.offer(m).unit
+  private[raft] def sendMessage(m: Message) = queues.outboundQueue.offer(m)
 
-  private[raft] def sendMessages(ms: Iterable[Message]): USTM[Unit] =
-    queues.outboundQueue.offerAll(ms).unit
+  private[raft] def sendMessages(ms: Iterable[Message]) = queues.outboundQueue.offerAll(ms)
 
-  private[raft] def nodeState: UIO[NodeState] = state.nodeState.commit
+  private[raft] def nodeState: UIO[NodeState] = state.nodeState
 
-  private[raft] def isLeader: UIO[Boolean] = state.isLeader.commit
+  private[raft] def isLeader: UIO[Boolean] = state.isLeader
 
   private[raft] def peers = state.peerList
 
@@ -63,9 +60,9 @@ final class Raft[T](
     peers       <- state.peerList
     commitIndex <- state.lastCommitIndex
     logSize     <- storage.logSize
-    _ <- ZSTM.collectAll(
-      peers.map(p =>
-        for {
+    _ <- ZIO.collectAllPar(
+      peers.map { p =>
+        val appendProgram = for {
           nextIndex <- state.nextIndexForPeer(p).map(_.getOrElse(Index(0)))
           previousIndex = if (nextIndex == Index(-1)) nextIndex else nextIndex.decrement
           previousTerm <-
@@ -84,7 +81,8 @@ final class Raft[T](
             )
           )
         } yield ()
-      )
+        appendProgram
+      }
     )
   } yield ()
 
@@ -99,12 +97,12 @@ final class Raft[T](
     lastIndex       <- storage.lastIndex
     indices         <- state.matchIndexEntries.map(_.map { case (_, index) => index } :+ lastIndex)
     maybeMedian = indices.sortBy(_.index).lift(indices.size / 2)
-    _ <- maybeMedian.fold[ZSTM[Any, StorageException, Unit]](ZSTM.unit) { median =>
+    _ <- maybeMedian.fold[ZIO[Any, StorageException, Unit]](ZIO.unit) { median =>
       for {
         logEntry <- storage.getEntry(median)
-        _ <- logEntry.fold[ZSTM[Any, StorageException, Unit]](ZSTM.unit) { entry =>
+        _ <- logEntry.fold[ZIO[Any, StorageException, Unit]](ZIO.unit) { entry =>
           if (entry.term == term && median > lastCommitIndex) state.updateCommitIndex(median)
-          else ZSTM.unit
+          else ZIO.unit
         }
       } yield ()
     }
@@ -120,18 +118,18 @@ final class Raft[T](
         updateCommitIndex
     else state.decrementNextIndex(response.from)
 
-  private def processAppendEntriesResponses = queues.appendResponseQueue.takeAll.commit.flatMap { aers =>
+  private def processAppendEntriesResponses = queues.appendResponseQueue.takeAll.flatMap { aers =>
     for {
-      currentTerm <- storage.getTerm.commit
+      currentTerm <- storage.getTerm
       maxTerm = aers.map(_.term.term).maxOption
       _ <- maxTerm.fold[ZIO[Clock, StorageException, Unit]](IO.unit) { mx =>
         if (mx > currentTerm.term)
           (storage.storeTerm(Term(mx)) <*
-            state.becomeFollower).commit
+            state.becomeFollower)
         else
           ZIO
             .collectAll(
-              aers.map(response => handleAppendEntriesResponse(response).commit)
+              aers.map(response => handleAppendEntriesResponse(response))
             )
             .unit
       }
@@ -140,7 +138,7 @@ final class Raft[T](
 
   private def sendHeartbeats: ZIO[Clock, RaftException, Unit] = {
 
-    lazy val sendHeartbeatEntries = sendAppendEntries.commit
+    lazy val sendHeartbeatEntries = sendAppendEntries
       .delay(Raft.LeaderHeartbeat)
       .repeatWhileM(_ => isLeader)
 
@@ -148,7 +146,7 @@ final class Raft[T](
 
   }
 
-  private def sendVoteRequests(term: Term): STM[StorageException, Unit] = for {
+  private def sendVoteRequests(term: Term): IO[StorageException, Unit] = for {
     peers     <- state.peerList
     lastIndex <- storage.lastIndex
     lastTerm  <- storage.lastEntry.map(_.map(_.term).getOrElse(Term(-1)))
@@ -158,20 +156,19 @@ final class Raft[T](
 
   private def collectVotes(forTerm: Term) = {
     lazy val voteCollectionProgram = for {
-      newVote <- queues.inboundVoteResponseQueue.take.commit
-      processVote =
+      newVote <- queues.inboundVoteResponseQueue.take
+      processVote <-
         if (newVote.term.isAfter(forTerm))
           storage.storeTerm(newVote.term) *>
             state.becomeFollower
         else if (newVote.term == forTerm && newVote.granted)
           state.addVote(Vote(newVote.from, newVote.term)).flatMap { hasWon =>
             if (hasWon) storage.lastIndex.flatMap(state.initPeerIndices(_))
-            else ZSTM.unit
+            else ZIO.unit
           }
         else if (newVote.term == forTerm && !newVote.granted)
           state.addVoteRejection(Vote(newVote.from, newVote.term))
-        else ZSTM.unit
-      _ <- processVote.commit
+        else ZIO.unit
     } yield ()
 
     voteCollectionProgram
@@ -189,16 +186,21 @@ final class Raft[T](
   } yield ()
 
   private[raft] def runForLeader = {
-    lazy val standForElectionProgram = for {
-      currentTerm <- storage.getTerm
-      newTerm = currentTerm.increment
-      _ <- state.stand(newTerm)
-      _ <- storage.storeTerm(newTerm)
-      _ <- storage.storeVote(Vote(nodeId, newTerm))
-      _ <- sendVoteRequests(newTerm)
+    // println(s"NODE $nodeId RUNNING FOR LEADER AT ${System.currentTimeMillis()}")
+    /// this bastard here runs 10 times. Only the term gets bumped. Only after the 10nth time it commits.
+    // practically, `standForElectionProgram` is executed 10 times before it commits and exits
+    // `sendVoteRequests` is only executed once! but the term is incremented and saved 10 times
+    // TRef is supposed to wrap an immutable value but rocksDB is not that
+    // With memory only implementation STM simply rolled back the transaction (still doing the 10 reps on this)
+    // With RocksDB it simply goes to RocksDB 10 times
+    val standForElectionProgram = for {
+      newTerm <- storage.incrementTerm
+      _       <- state.stand(newTerm)
+      _       <- storage.storeVote(Vote(nodeId, newTerm))
+      _       <- sendVoteRequests(newTerm)
     } yield newTerm
 
-    standForElectionProgram.commit.flatMap { term =>
+    standForElectionProgram.flatMap { term =>
       collectVotes(term) *> electionResult
     }
   }
@@ -207,8 +209,10 @@ final class Raft[T](
     sendMessage(VoteResponse(nodeId, voteRequest.from, voteRequest.term, granted))
 
   private def proccessVoteRequest(voteRequest: VoteRequest) = (for {
-    (currentTerm, currentVote) <- storage.getTerm <*> storage.getVote
-    (lastIndex, lastEntry)     <- storage.lastIndex <*> storage.lastEntry
+    currentTerm <- storage.getTerm
+    currentVote <- storage.getVote
+    lastIndex   <- storage.lastIndex
+    lastEntry   <- storage.lastEntry
     _ <-
       if (
         lastIndex > voteRequest.lastLogIndex ||
@@ -227,26 +231,26 @@ final class Raft[T](
         storage.storeVote(Vote(voteRequest.from, currentTerm)) *>
           sendVoteResponse(voteRequest, granted = true)
       else sendVoteResponse(voteRequest, granted = false)
-  } yield ()).commit
+  } yield ())
 
-  private def processInboundVoteRequests: ZIO[Clock, RaftException, Unit] = queues.inboundVoteRequestQueue.take.commit
+  private def processInboundVoteRequests: ZIO[Clock, RaftException, Unit] = queues.inboundVoteRequestQueue.take
     .flatMap(proccessVoteRequest)
     .forever
 
   private def shouldAppend(previousIndex: Index, previousTerm: Term) =
-    if (previousIndex.index == -1) STM.succeed(true)
+    if (previousIndex.index == -1) ZIO.succeed(true)
     else
       for {
         size <- storage.logSize
         term <- storage.getEntry(previousIndex).map(_.map(_.term).getOrElse(Term.Invalid))
         success = (previousTerm == term) && previousIndex.index == size - 1
-        _ <- if (!success) storage.purgeFrom(previousIndex) else ZSTM.unit
+        _ <- if (!success) storage.purgeFrom(previousIndex) else ZIO.unit
       } yield success
 
   private def appendLog(ae: AppendEntries) =
     shouldAppend(ae.prevLogIndex, ae.prevLogTerm).flatMap { shouldAppend =>
       if (shouldAppend) for {
-        _             <- storage.appendEntries(ae.entries.toList)
+        _             <- storage.appendEntries(ae.prevLogIndex.increment, ae.entries.toList)
         currentCommit <- state.lastCommitIndex
         _ <-
           if (ae.leaderCommitIndex > currentCommit)
@@ -254,21 +258,21 @@ final class Raft[T](
               val newCommitIndex = Index(math.min(size - 1, ae.leaderCommitIndex.index))
               state.updateCommitIndex(newCommitIndex) *>
                 storage.getRange(currentCommit.increment, newCommitIndex).flatMap { entries =>
-                  ZSTM.collectAll(
+                  ZIO.collectAll(
                     entries.map(e => stateMachine.write(e.command) *> state.incrementLastApplied)
                   )
                 }
             }
-          else STM.unit
+          else ZIO.unit
       } yield ()
-      else STM.unit
+      else ZIO.unit
     }
 
   private def processEntries(ae: AppendEntries) = (for {
     currentTerm  <- storage.getTerm
     currentState <- state.nodeState
     lastIndex    <- storage.logSize.map(x => Index(x - 1))
-    (success, term) <-
+    result <-
       if (ae.term.isAfter(currentTerm))
         storage.storeTerm(ae.term) *>
           state.becomeFollower *>
@@ -281,9 +285,10 @@ final class Raft[T](
       else if (ae.term == currentTerm && currentState == NodeState.Follower)
         state.setLeader(ae.from) *>
           appendLog(ae).map(_ => (true, ae.term))
-      else if (currentTerm.isAfter(ae.term)) STM.succeed((false, currentTerm))
-      else STM.fail(InvalidStateException("Unknown state. This is likely a bug."))
+      else if (currentTerm.isAfter(ae.term)) ZIO.succeed((false, currentTerm))
+      else ZIO.fail(InvalidStateException("Unknown state. This is likely a bug."))
     updatedLastIndex <- storage.logSize.map(x => Index(x - 1))
+    (success, term) = result
     _ <- sendMessage(
       AppendEntriesResponse(
         ae.to,
@@ -295,18 +300,18 @@ final class Raft[T](
         success = success
       )
     )
-  } yield ()).commit
+  } yield ())
 
   private def processInboundEntries: ZIO[Clock, RaftException, Unit] =
-    queues.appendEntriesQueue.take.commit.disconnect
+    queues.appendEntriesQueue.take.disconnect
       .timeout(ElectionTimeout.newTimeout.value.milliseconds)
       .flatMap { maybeEntries =>
         maybeEntries.fold[ZIO[Clock, RaftException, Unit]](
           for {
-            nodeState   <- state.nodeState.commit
-            currentTerm <- storage.getTerm.commit
-            currentVote <- storage.getVote.commit
-            hasLost     <- state.hasLost(currentTerm).commit
+            nodeState   <- state.nodeState
+            currentTerm <- storage.getTerm
+            currentVote <- storage.getVote
+            hasLost     <- state.hasLost(currentTerm)
             _ <-
               if ((nodeState == NodeState.Follower && currentVote.isEmpty) || hasLost) runForLeader
               else processInboundEntries
@@ -325,14 +330,15 @@ final class Raft[T](
   private def processCommand(command: WriteCommand) = {
     lazy val processCommandProgram = for {
       term    <- storage.getTerm
-      _       <- storage.appendEntry(LogEntry(command, term))
+      last    <- storage.lastIndex
+      _       <- storage.appendEntry(last.increment, LogEntry(command, term))
       logSize <- storage.logSize
     } yield logSize
 
-    processCommandProgram.commit.flatMap { logSize =>
-      state.lastCommitIndex.commit
+    processCommandProgram.flatMap { logSize =>
+      state.lastCommitIndex
         .repeatUntil(_.index >= logSize - 1)
-        .flatMap(_ => applyToStateMachine(command).commit)
+        .flatMap(_ => applyToStateMachine(command))
         .map(_ => Committed)
     }
   }
@@ -341,7 +347,7 @@ final class Raft[T](
    * Blocks until it gets committed.
    */
   def submitCommand(command: WriteCommand): ZIO[Clock, RaftException, CommandResponse] =
-    state.leader.commit.flatMap { leader =>
+    state.leader.flatMap { leader =>
       leader match {
         case Some(leaderId) if leaderId == nodeId => processCommand(command)
         case Some(leaderId) if leaderId != nodeId => ZIO.succeed(Redirect(leaderId))
@@ -350,18 +356,18 @@ final class Raft[T](
     }
 
   def submitQuery(query: ReadCommand): ZIO[Clock, RaftException, Option[T]] =
-    stateMachine.read(query).commit
+    stateMachine.read(query)
 
 }
 
 object Raft {
 
   case class MessageQueues(
-    inboundVoteResponseQueue: TQueue[VoteResponse],
-    inboundVoteRequestQueue: TQueue[VoteRequest],
-    appendResponseQueue: TQueue[AppendEntriesResponse],
-    appendEntriesQueue: TQueue[AppendEntries],
-    outboundQueue: TQueue[Message]
+    inboundVoteResponseQueue: Queue[VoteResponse],
+    inboundVoteRequestQueue: Queue[VoteRequest],
+    appendResponseQueue: Queue[AppendEntriesResponse],
+    appendEntriesQueue: Queue[AppendEntries],
+    outboundQueue: Queue[Message]
   )
 
   object MessageQueues {
@@ -369,7 +375,7 @@ object Raft {
     private val DefaultQueueSize = 100
 
     private def newQueue[T](queueSize: Int) =
-      TQueue.bounded[T](queueSize).commit
+      Queue.bounded[T](queueSize)
 
     def default = apply(DefaultQueueSize)
 

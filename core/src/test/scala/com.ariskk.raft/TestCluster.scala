@@ -3,7 +3,6 @@ package com.ariskk.raft
 import scala.util.Random
 
 import zio._
-import zio.stm._
 import zio.duration._
 
 import com.ariskk.raft.model._
@@ -18,17 +17,17 @@ import Message._
  * The implementation is non-deterministic on purpose as the algorithm must
  * converge at all times.
  */
-final class TestCluster[T](nodeRef: TRef[Seq[Raft[T]]], chaos: Boolean) {
+final class TestCluster[T](nodeRef: Ref[Seq[Raft[T]]], chaos: Boolean) {
 
   def getNode(id: NodeId) = for {
-    nodes <- nodeRef.get.commit
+    nodes <- nodeRef.get
     node  <- ZIO.fromOption(nodes.find(_.nodeId == id))
   } yield node
 
-  def getNodes: UIO[Seq[Raft[T]]] = nodeRef.get.commit
+  def getNodes: UIO[Seq[Raft[T]]] = nodeRef.get
 
   def getNodeStates: UIO[Iterable[NodeState]] = for {
-    nodes    <- nodeRef.get.commit
+    nodes    <- nodeRef.get
     nodeData <- ZIO.collectAll(nodes.map(_.nodeState))
   } yield nodeData
 
@@ -57,15 +56,16 @@ final class TestCluster[T](nodeRef: TRef[Seq[Raft[T]]], chaos: Boolean) {
   def run = {
 
     lazy val startNodes = for {
-      nodes <- nodeRef.get.commit
+      nodes <- nodeRef.get
       _ <- ZIO.collectAllPar_(
         nodes.map(_.run)
       )
     } yield ()
 
     lazy val program = for {
-      nodes   <- nodeRef.get.commit
+      nodes   <- nodeRef.get
       allMsgs <- ZIO.collectAll(nodes.map(_.takeAll)).map(_.flatten)
+      // _ = if(allMsgs.size>1)println(allMsgs)
       msgIOs = if (chaos) networkChaos(allMsgs) else allMsgs.map(sendMessage)
       _ <- ZIO.collectAllPar(msgIOs)
     } yield ()
@@ -85,7 +85,7 @@ final class TestCluster[T](nodeRef: TRef[Seq[Raft[T]]], chaos: Boolean) {
   def getAllLogEntries = for {
     nodes <- getNodes
     ids = nodes.map(_.nodeId)
-    all <- ZIO.collectAll(nodes.map(_.getAllEntries.commit))
+    all <- ZIO.collectAll(nodes.map(_.getAllEntries))
   } yield (ids, all)
 
   def queryStateMachines(query: ReadCommand) = for {
@@ -101,10 +101,14 @@ object TestCluster {
 
     for {
       nodes   <- ZIO.collectAll(nodeIds.map(id => TestRaft[T](id, nodeIds - id)))
-      nodeRef <- TRef.makeCommit(nodes.toSeq)
+      nodeRef <- Ref.make(nodes.toSeq)
     } yield new TestCluster[T](nodeRef, chaos)
   }
 
   def applyUnit(numberOfNodes: Int, chaos: Boolean = false): UIO[TestCluster[Unit]] =
     apply[Unit](numberOfNodes, chaos)
+
+  def forNodes[T](nodes: Seq[Raft[T]], chaos: Boolean = false): UIO[TestCluster[T]] =
+    Ref.make(nodes.toSeq).map(nodeRef => new TestCluster[T](nodeRef, chaos))
+
 }

@@ -53,9 +53,9 @@ object RaftSpec extends BaseSpec {
       lazy val program = for {
         raft             <- TestRaft.default[Unit]
         _                <- raft.addPeer(newPeer)
-        peersWithNewPeer <- raft.peers.commit
+        peersWithNewPeer <- raft.peers
         _                <- raft.removePeer(newPeer)
-        peersWithout     <- raft.peers.commit
+        peersWithout     <- raft.peers
       } yield (peersWithNewPeer, peersWithout)
 
       assertM(program)(equalTo((List(newPeer), List.empty[NodeId])))
@@ -68,8 +68,8 @@ object RaftSpec extends BaseSpec {
       lazy val program = for {
         raft  <- TestRaft.default[Int]
         fiber <- raft.runFollowerLoop.fork
-        _     <- raft.appendEntry(LogEntry(intCommand(0), Term(1)))
-        _     <- raft.appendEntry(LogEntry(intCommand(1), Term(3)))
+        _     <- raft.appendEntry(Index(0), LogEntry(intCommand(0), Term(1)))
+        _     <- raft.appendEntry(Index(1), LogEntry(intCommand(1), Term(3)))
         // Last entry has an older term
         firstRequest = VoteRequest(peer, raft.nodeId, Term(4), Index(1), Term(2))
         // Candidate log is smaller than follower log

@@ -12,13 +12,8 @@ This is a work in progress and likely contains a ton of very nasty bugs. What is
 I am new to ZIO and it is very likely there are nicer, more idiomatic ways to express computations.
 Feedback always welcome!
 
-## Implementation
-
-TBD
-
 Missing:
-- Cluster Memberships
+- Cluster Membership management
 - RPC. Currently network is emulated in `TestCluster` by introducing non-Byzantine failures to message passing.
-- Persistent storage. Likely RocksDB
 - Snapshots
 - Proven Linearizability (ie using Jepsen)

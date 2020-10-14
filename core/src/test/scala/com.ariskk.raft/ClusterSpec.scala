@@ -14,7 +14,7 @@ import com.ariskk.raft.statemachine._
  */
 object ClusterSpec extends BaseSpec {
 
-  override def aspects = List(TestAspect.timeout(2.seconds))
+  override def aspects = List(TestAspect.timeout(5.seconds))
 
   def spec = suite("ClusterSpec")(
     testM("A three node cluster should be able to elect a single leader") {
