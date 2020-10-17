@@ -1,6 +1,6 @@
 package com.ariskk.raft.storage
 
-import zio.stm._
+import zio._
 
 import com.ariskk.raft.model._
 
@@ -13,39 +13,48 @@ import com.ariskk.raft.model._
 trait Storage {
   def log: Log
 
-  def appendEntry(entry: LogEntry): STM[StorageException, Unit] = log.append(entry)
+  def appendEntry(index: Index, entry: LogEntry): IO[StorageException, Unit] = log.append(index, entry)
 
-  def appendEntries(entries: List[LogEntry]): STM[StorageException, Unit] = ZSTM
-    .collectAll(
-      entries.map(appendEntry)
-    )
-    .unit
+  def appendEntries(fromIndex: Index, entries: List[LogEntry]): IO[StorageException, Unit] = {
+    val indicies = (fromIndex.index to fromIndex.index + entries.size - 1).toList
+    ZIO
+      .collectAll(
+        indicies.zip(entries).map { case (i, e) => appendEntry(Index(i), e) }
+      )
+      .unit
+  }
 
-  def getEntry(index: Index): STM[StorageException, Option[LogEntry]] = log.getEntry(index)
+  def getEntry(index: Index): IO[StorageException, Option[LogEntry]] = log.getEntry(index)
 
-  def getEntries(fromIndex: Index): STM[StorageException, List[LogEntry]] =
+  def getEntries(fromIndex: Index): IO[StorageException, List[LogEntry]] =
     log.getEntries(fromIndex)
 
-  def getRange(from: Index, to: Index): STM[StorageException, List[LogEntry]] =
+  def getRange(from: Index, to: Index): IO[StorageException, List[LogEntry]] =
     log.getRange(from, to)
 
-  def lastEntry: STM[StorageException, Option[LogEntry]] = for {
+  def lastEntry: IO[StorageException, Option[LogEntry]] = for {
     size <- logSize
     last <- getEntry(Index(size - 1))
   } yield last
 
-  def lastIndex: STM[StorageException, Index] = logSize.map(s => Index(s - 1))
+  def lastIndex: IO[StorageException, Index] = logSize.map(s => Index(s - 1))
 
-  def purgeFrom(index: Index): STM[StorageException, Unit] = log.purgeFrom(index)
+  def purgeFrom(index: Index): IO[StorageException, Unit] = log.purgeFrom(index)
 
-  def logSize: STM[StorageException, Long] = log.size
+  def logSize: IO[StorageException, Long] = log.size
 
-  def storeVote(vote: Vote): STM[StorageException, Unit]
+  def storeVote(vote: Vote): IO[StorageException, Unit]
 
-  def getVote: STM[StorageException, Option[Vote]]
+  def getVote: IO[StorageException, Option[Vote]]
 
-  def storeTerm(term: Term): STM[StorageException, Unit]
+  def storeTerm(term: Term): IO[StorageException, Unit]
 
-  def getTerm: STM[StorageException, Term]
+  def getTerm: IO[StorageException, Term]
+
+  def incrementTerm: IO[StorageException, Term] = for {
+    term    <- getTerm
+    newTerm <- ZIO.succeed(term.increment)
+    _       <- storeTerm(newTerm)
+  } yield newTerm
 
 }

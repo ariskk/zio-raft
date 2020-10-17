@@ -1,6 +1,6 @@
 package com.ariskk.raft.statemachine
 
-import zio.stm._
+import zio._
 
 import com.ariskk.raft.model._
 
@@ -8,11 +8,11 @@ final case class Key(value: String)              extends AnyVal
 final case class ReadKey(key: Key)               extends ReadCommand
 final case class WriteKey[T](key: Key, value: T) extends WriteCommand
 
-final class KeyValueStore[T](map: TMap[Key, T]) extends StateMachine[T] {
-  def write = { case WriteKey(key: Key, value: T) => map.put(key, value) }
-  def read  = { case ReadKey(key) => map.get(key) }
+final class KeyValueStore[T](map: Ref[Map[Key, T]]) extends StateMachine[T] {
+  def write = { case WriteKey(key: Key, value: T) => map.update(_ + (key -> value)) }
+  def read  = { case ReadKey(key) => map.get.map(_.get(key)) }
 }
 
 object KeyValueStore {
-  def apply[R] = TMap.empty[Key, R].commit.map(new KeyValueStore(_))
+  def apply[R] = Ref.make(Map.empty[Key, R]).map(new KeyValueStore(_))
 }

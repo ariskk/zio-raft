@@ -1,8 +1,13 @@
 package com.ariskk.raft.model
 
-sealed trait RaftException                          extends Throwable
-case class InvalidStateException(message: String)   extends RaftException
-case class InvalidCommandException(message: String) extends RaftException
-case class StorageException(message: String)        extends RaftException
-case object LeaderNotFoundException                 extends RaftException
-case class StateMachineException(message: String)   extends RaftException
+sealed trait RaftException                                extends Exception
+final case class InvalidStateException(message: String)   extends Exception(message) with RaftException
+final case class InvalidCommandException(message: String) extends Exception(message) with RaftException
+final case class StorageException(message: String, causedBy: Option[Throwable])
+    extends Exception(message, causedBy.orNull)
+    with RaftException
+final case object LeaderNotFoundException               extends Exception("Leader not found") with RaftException
+final case class StateMachineException(message: String) extends Exception(message) with RaftException
+final case class SerializationException(message: String, causedBy: Option[Throwable])
+    extends Exception(message, causedBy.orNull)
+    with RaftException

@@ -1,42 +1,42 @@
 package com.ariskk.raft.volatile
 
-import zio.stm._
+import zio._
 import zio.UIO
 
 import com.ariskk.raft.model._
 
 final class VolatileState(
   val nodeId: NodeId,
-  peers: TSet[NodeId],
-  currentLeader: TRef[Option[NodeId]],
-  state: TRef[NodeState],
-  votesReceived: TSet[Vote],
-  votesRejected: TSet[Vote],
-  commitIndex: TRef[Index],
-  lastApplied: TRef[Index],
-  nextIndex: TMap[NodeId, Index],
-  matchIndex: TMap[NodeId, Index]
+  peers: Ref[Set[NodeId]],
+  currentLeader: Ref[Option[NodeId]],
+  state: Ref[NodeState],
+  votesReceived: Ref[Set[Vote]],
+  votesRejected: Ref[Set[Vote]],
+  commitIndex: Ref[Index],
+  lastApplied: Ref[Index],
+  nextIndex: Ref[Map[NodeId, Index]],
+  matchIndex: Ref[Map[NodeId, Index]]
 ) {
   def stand(newTerm: Term) = for {
-    _ <- votesReceived.removeIf(_.term != newTerm)
-    _ <- votesRejected.removeIf(_.term != newTerm)
+    _ <- votesReceived.update(_.filterNot(_.term != newTerm))
+    _ <- votesRejected.update(_.filterNot(_.term != newTerm))
     _ <- state.set(NodeState.Candidate)
     _ <- addVote(Vote(nodeId, newTerm))
   } yield ()
 
-  def peerList = peers.toList
+  def peerList = peers.get.map(_.toList)
 
-  def nextIndexForPeer(peerId: NodeId) = nextIndex.get(peerId)
+  def nextIndexForPeer(peerId: NodeId) = nextIndex.get.map(_.get(peerId))
 
-  def matchIndexForPeer(peerId: NodeId) = matchIndex.get(peerId)
+  def matchIndexForPeer(peerId: NodeId) = matchIndex.get.map(_.get(peerId))
 
   def updateMatchIndex(peerId: NodeId, index: Index) =
-    matchIndex.put(peerId, index)
+    matchIndex.update(_ + (peerId -> index))
 
   def updateCommitIndex(index: Index) = commitIndex.set(index)
 
   def updateNextIndex(peerId: NodeId, index: Index) =
-    nextIndex.put(peerId, index)
+    nextIndex.update(_ + (peerId -> index))
 
   def decrementNextIndex(peerId: NodeId) = for {
     next <- nextIndexForPeer(peerId)
@@ -44,12 +44,12 @@ final class VolatileState(
     _ <- updateNextIndex(peerId, nextIndex)
   } yield ()
 
-  def matchIndexEntries = matchIndex.toList
+  def matchIndexEntries = matchIndex.get.map(_.toList)
 
   def initPeerIndices(lastIndex: Index) = for {
     peers <- peerList
-    _     <- ZSTM.collectAll(peers.map(nextIndex.put(_, lastIndex.increment)))
-    _     <- ZSTM.collectAll(peers.map(matchIndex.put(_, Index(0))))
+    _     <- ZIO.collectAll(peers.map(p => nextIndex.update(_ + (p -> lastIndex.increment))))
+    _     <- ZIO.collectAll(peers.map(p => matchIndex.update(_ + (p -> Index(0)))))
   } yield ()
 
   def setLastApplied(index: Index) = lastApplied.set(index)
@@ -58,9 +58,9 @@ final class VolatileState(
 
   def nodeState = state.get
 
-  def addPeer(id: NodeId) = peers.put(id)
+  def addPeer(id: NodeId) = peers.update(_ + id)
 
-  def removePeer(id: NodeId) = peers.delete(id)
+  def removePeer(id: NodeId) = peers.update(_ - id)
 
   def becomeFollower = state.set(NodeState.Follower)
 
@@ -74,25 +74,25 @@ final class VolatileState(
   def leader = currentLeader.get
 
   def addVote(vote: Vote) = for {
-    _     <- votesReceived.retainIf(_.term == vote.term)
-    _     <- votesReceived.put(vote)
-    set   <- votesReceived.toList
-    peers <- peers.toList
+    _     <- votesReceived.update(_.filter(_.term == vote.term))
+    _     <- votesReceived.update(_ + vote)
+    set   <- votesReceived.get.map(_.toList)
+    peers <- peerList
     hasMajority = 2 * set.size > peers.size + 1
-    _ <- if (hasMajority) becomeLeader else ZSTM.unit
+    _ <- if (hasMajority) becomeLeader else ZIO.unit
   } yield hasMajority
 
   def addVoteRejection(vote: Vote) = for {
-    _     <- votesRejected.retainIf(_.term == vote.term)
-    _     <- votesRejected.put(vote)
-    set   <- votesRejected.toList
-    peers <- peers.toList
+    _     <- votesRejected.update(_.filter(_.term == vote.term))
+    _     <- votesRejected.update(_ + vote)
+    set   <- votesRejected.get
+    peers <- peerList
     hasLost = 2 * set.size > peers.size + 1
-    _ <- if (hasLost) becomeFollower else ZSTM.unit
+    _ <- if (hasLost) becomeFollower else ZIO.unit
   } yield hasLost
 
   def hasLost(term: Term) = for {
-    vr    <- votesRejected.toList
+    vr    <- votesRejected.get.map(_.toList)
     peers <- peerList
     rejections = vr.filter(_.term == term)
   } yield 2 * rejections.size > peers.size + 1
@@ -107,15 +107,15 @@ final class VolatileState(
 
 object VolatileState {
   def apply[T](nodeId: NodeId, peers: Set[NodeId]): UIO[VolatileState] = for {
-    peerRef          <- TSet.make[NodeId](peers.toSeq: _*).commit
-    leaderRef        <- TRef.makeCommit[Option[NodeId]](None)
-    stateRef         <- TRef.makeCommit[NodeState](NodeState.Follower)
-    votesReceivedRef <- TSet.empty[Vote].commit
-    votesRejectedRef <- TSet.empty[Vote].commit
-    commitIndex      <- TRef.makeCommit(Index(-1L))
-    lastApplied      <- TRef.makeCommit(Index(-1L))
-    nextIndex        <- TMap.fromIterable(peers.map(p => (p, Index(0)))).commit
-    matchIndex       <- TMap.fromIterable(peers.map(p => (p, Index(-1)))).commit
+    peerRef          <- Ref.make[Set[NodeId]](peers.toSet)
+    leaderRef        <- Ref.make[Option[NodeId]](None)
+    stateRef         <- Ref.make[NodeState](NodeState.Follower)
+    votesReceivedRef <- Ref.make(Set.empty[Vote])
+    votesRejectedRef <- Ref.make(Set.empty[Vote])
+    commitIndex      <- Ref.make(Index(-1L))
+    lastApplied      <- Ref.make(Index(-1L))
+    nextIndex        <- Ref.make(peers.map(p => (p, Index(0))).toMap)
+    matchIndex       <- Ref.make(peers.map(p => (p, Index(-1))).toMap)
   } yield new VolatileState(
     nodeId,
     peerRef,
