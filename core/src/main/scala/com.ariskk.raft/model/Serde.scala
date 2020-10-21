@@ -8,7 +8,7 @@ import com.twitter.chill.ScalaKryoInstantiator
 
 trait Serde {
   def serialize[T: ClassTag](t: T): Array[Byte]
-  def deserialze[T: ClassTag](bytes: Array[Byte]): Either[SerializationException, T]
+  def deserialize[T: ClassTag](bytes: Array[Byte]): Either[SerializationException, T]
 }
 
 object Serde {
@@ -16,7 +16,7 @@ object Serde {
     private lazy val kryo = ScalaKryoInstantiator.defaultPool
 
     override def serialize[T: ClassTag](t: T): Array[Byte] = kryo.toBytesWithClass(t)
-    override def deserialze[T: ClassTag](bytes: Array[Byte]): Either[SerializationException, T] =
+    override def deserialize[T: ClassTag](bytes: Array[Byte]): Either[SerializationException, T] =
       Try(kryo.fromBytes(bytes)) match {
         case Success(value) =>
           value

@@ -35,11 +35,20 @@ lazy val otherDepds = Seq(
   "com.twitter" %% "chill" % "0.9.5"
 )
 
+lazy val CompileTest = "compile->compile;test->test"
+
 lazy val core = (project in file("core"))
 
 lazy val rocksdb = (project in file("rocksdb")).settings(
   libraryDependencies ++= rocksDbDeps
-).dependsOn(core % "compile->compile;test->test")
+).dependsOn(core % CompileTest)
+
+lazy val server = (project in file("server")).settings(
+  libraryDependencies +=  "dev.zio" %% "zio-nio" % "1.0.0-RC10"
+).dependsOn(
+  core % CompileTest,
+  rocksdb % CompileTest
+)
 
 lazy val root = (project in file("."))
   .settings(
@@ -53,4 +62,4 @@ lazy val root = (project in file("."))
     semanticdbEnabled in ThisBuild := true,
     semanticdbVersion in ThisBuild := scalafixSemanticdb.revision
   )
-  .aggregate(core, rocksdb)
+  .aggregate(core, rocksdb, server)

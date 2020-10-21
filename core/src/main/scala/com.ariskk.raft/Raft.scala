@@ -186,13 +186,7 @@ final class Raft[T](
   } yield ()
 
   private[raft] def runForLeader = {
-    // println(s"NODE $nodeId RUNNING FOR LEADER AT ${System.currentTimeMillis()}")
-    /// this bastard here runs 10 times. Only the term gets bumped. Only after the 10nth time it commits.
-    // practically, `standForElectionProgram` is executed 10 times before it commits and exits
-    // `sendVoteRequests` is only executed once! but the term is incremented and saved 10 times
-    // TRef is supposed to wrap an immutable value but rocksDB is not that
-    // With memory only implementation STM simply rolled back the transaction (still doing the 10 reps on this)
-    // With RocksDB it simply goes to RocksDB 10 times
+
     val standForElectionProgram = for {
       newTerm <- storage.incrementTerm
       _       <- state.stand(newTerm)
@@ -351,10 +345,13 @@ final class Raft[T](
       leader match {
         case Some(leaderId) if leaderId == nodeId => processCommand(command)
         case Some(leaderId) if leaderId != nodeId => ZIO.succeed(Redirect(leaderId))
-        case None                                 => ZIO.fail(LeaderNotFoundException)
+        case None                                 => ZIO.succeed(LeaderNotFoundResponse)
       }
     }
 
+  /**
+   * Only the leader should allow reads
+   */
   def submitQuery(query: ReadCommand): ZIO[Clock, RaftException, Option[T]] =
     stateMachine.read(query)
 

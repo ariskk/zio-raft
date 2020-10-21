@@ -65,7 +65,6 @@ final class TestCluster[T](nodeRef: Ref[Seq[Raft[T]]], chaos: Boolean) {
     lazy val program = for {
       nodes   <- nodeRef.get
       allMsgs <- ZIO.collectAll(nodes.map(_.takeAll)).map(_.flatten)
-      // _ = if(allMsgs.size>1)println(allMsgs)
       msgIOs = if (chaos) networkChaos(allMsgs) else allMsgs.map(sendMessage)
       _ <- ZIO.collectAllPar(msgIOs)
     } yield ()
