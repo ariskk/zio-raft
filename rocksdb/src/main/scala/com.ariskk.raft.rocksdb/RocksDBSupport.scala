@@ -22,7 +22,7 @@ abstract class RocksDBSupport(
   } yield bytes
 
   private def deserialize[T: ClassTag](bytes: Array[Byte]) =
-    serdeRef.get.flatMap(s => ZIO.fromEither(s.deserialze[T](bytes)))
+    serdeRef.get.flatMap(s => ZIO.fromEither(s.deserialize[T](bytes)))
 
   def getKey[T: ClassTag](key: Array[Byte]): IO[StorageException, Option[T]] =
     withDB(_.get(key))
