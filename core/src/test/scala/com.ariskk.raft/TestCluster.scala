@@ -6,7 +6,6 @@ import zio._
 import zio.duration._
 
 import com.ariskk.raft.model._
-import Message._
 
 /**
  * Relays messages between Raft consensus modules to allow for quick in-memory leader election
@@ -33,13 +32,7 @@ final class TestCluster[T](nodeRef: Ref[Seq[Raft[T]]], chaos: Boolean) {
 
   private def sendMessage(m: Message) = for {
     node <- getNode(m.to)
-    _ <- m match {
-      case v: VoteRequest           => node.offerVoteRequest(v)
-      case v: VoteResponse          => node.offerVote(v)
-      case ae: AppendEntries        => node.offerAppendEntries(ae)
-      case r: AppendEntriesResponse => node.offerAppendEntriesResponse(r)
-      case _                        => ZIO.die(new UnsupportedOperationException("Message type not supported"))
-    }
+    _    <- node.offerMessage(m)
   } yield ()
 
   /**

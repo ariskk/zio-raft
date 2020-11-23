@@ -13,10 +13,10 @@ import com.ariskk.raft.statemachine.StateMachine
 
 /**
  * Runs the consensus module of a single Raft Node.
- * It communicates with the outside world through message passing, using `TQueue` instances.
- * Communication with the outside world is asynchronous; all messages are fire and forget.
+ * It communicates with the outside world through message passing, using `Queue` instances.
+ * Communication with the outside world is fully asynchronous.
  */
-final class Raft[T](
+final class Raft[T] private (
   val nodeId: NodeId,
   state: VolatileState,
   storage: Storage,
@@ -28,13 +28,13 @@ final class Raft[T](
 
   def takeAll: UIO[Seq[Message]] = queues.outboundQueue.takeAll
 
-  def offerVote(vote: VoteResponse) = queues.inboundVoteResponseQueue.offer(vote)
-
-  def offerAppendEntriesResponse(r: AppendEntriesResponse) = queues.appendResponseQueue.offer(r)
-
-  def offerAppendEntries(entries: AppendEntries) = queues.appendEntriesQueue.offer(entries)
-
-  def offerVoteRequest(request: VoteRequest) = queues.inboundVoteRequestQueue.offer(request)
+  def offerMessage(message: Message): UIO[Boolean] = message match {
+    case voteRequest: VoteRequest   => queues.inboundVoteRequestQueue.offer(voteRequest)
+    case voteResponse: VoteResponse => queues.inboundVoteResponseQueue.offer(voteResponse)
+    case entries: AppendEntries     => queues.appendEntriesQueue.offer(entries)
+    case entriesResponse: AppendEntriesResponse =>
+      queues.appendResponseQueue.offer(entriesResponse)
+  }
 
   def addPeer(peer: NodeId) = state.addPeer(peer)
 
@@ -101,8 +101,7 @@ final class Raft[T](
       for {
         logEntry <- storage.getEntry(median)
         _ <- logEntry.fold[ZIO[Any, StorageException, Unit]](ZIO.unit) { entry =>
-          if (entry.term == term && median > lastCommitIndex) state.updateCommitIndex(median)
-          else ZIO.unit
+          ZIO.when(entry.term == term && median > lastCommitIndex)(state.updateCommitIndex(median))
         }
       } yield ()
     }
@@ -154,7 +153,7 @@ final class Raft[T](
     _ <- sendMessages(requests)
   } yield ()
 
-  private def collectVotes(forTerm: Term) = {
+  private def collectVotes(forTerm: Term): ZIO[Clock, RaftException, Unit] = {
     lazy val voteCollectionProgram = for {
       newVote <- queues.inboundVoteResponseQueue.take
       processVote <-
@@ -163,8 +162,7 @@ final class Raft[T](
             state.becomeFollower
         else if (newVote.term == forTerm && newVote.granted)
           state.addVote(Vote(newVote.from, newVote.term)).flatMap { hasWon =>
-            if (hasWon) storage.lastIndex.flatMap(state.initPeerIndices(_))
-            else ZIO.unit
+            ZIO.when(hasWon)(storage.lastIndex.flatMap(state.initPeerIndices(_)))
           }
         else if (newVote.term == forTerm && !newVote.granted)
           state.addVoteRejection(Vote(newVote.from, newVote.term))
@@ -238,28 +236,29 @@ final class Raft[T](
         size <- storage.logSize
         term <- storage.getEntry(previousIndex).map(_.map(_.term).getOrElse(Term.Invalid))
         success = (previousTerm == term) && previousIndex.index == size - 1
-        _ <- if (!success) storage.purgeFrom(previousIndex) else ZIO.unit
+        _ <- ZIO.when(!success)(storage.purgeFrom(previousIndex))
       } yield success
 
   private def appendLog(ae: AppendEntries) =
     shouldAppend(ae.prevLogIndex, ae.prevLogTerm).flatMap { shouldAppend =>
-      if (shouldAppend) for {
-        _             <- storage.appendEntries(ae.prevLogIndex.increment, ae.entries.toList)
-        currentCommit <- state.lastCommitIndex
-        _ <-
-          if (ae.leaderCommitIndex > currentCommit)
-            storage.logSize.flatMap { size =>
-              val newCommitIndex = Index(math.min(size - 1, ae.leaderCommitIndex.index))
-              state.updateCommitIndex(newCommitIndex) *>
-                storage.getRange(currentCommit.increment, newCommitIndex).flatMap { entries =>
-                  ZIO.collectAll(
-                    entries.map(e => stateMachine.write(e.command) *> state.incrementLastApplied)
-                  )
-                }
-            }
-          else ZIO.unit
-      } yield ()
-      else ZIO.unit
+      ZIO.when(shouldAppend) {
+        for {
+          _             <- storage.appendEntries(ae.prevLogIndex.increment, ae.entries.toList)
+          currentCommit <- state.lastCommitIndex
+          _ <-
+            ZIO.when(ae.leaderCommitIndex > currentCommit)(
+              storage.logSize.flatMap { size =>
+                val newCommitIndex = Index(math.min(size - 1, ae.leaderCommitIndex.index))
+                state.updateCommitIndex(newCommitIndex) *>
+                  storage.getRange(currentCommit.increment, newCommitIndex).flatMap { entries =>
+                    ZIO.collectAll(
+                      entries.map(e => stateMachine.write(e.command) *> state.incrementLastApplied)
+                    )
+                  }
+              }
+            )
+        } yield ()
+      }
     }
 
   private def processEntries(ae: AppendEntries) = (for {
@@ -298,7 +297,7 @@ final class Raft[T](
 
   private def processInboundEntries: ZIO[Clock, RaftException, Unit] =
     queues.appendEntriesQueue.take.disconnect
-      .timeout(ElectionTimeout.newTimeout.value.milliseconds)
+      .timeout(ElectionTimeout.newTimeout.millis.milliseconds)
       .flatMap { maybeEntries =>
         maybeEntries.fold[ZIO[Clock, RaftException, Unit]](
           for {
@@ -326,6 +325,7 @@ final class Raft[T](
       term    <- storage.getTerm
       last    <- storage.lastIndex
       _       <- storage.appendEntry(last.increment, LogEntry(command, term))
+      -       <- sendAppendEntries
       logSize <- storage.logSize
     } yield logSize
 
@@ -350,9 +350,11 @@ final class Raft[T](
     }
 
   /**
-   * Only the leader should allow reads
+   * Only the leader should allow reads. The leader needs to contact a quorum to verify it is still
+   * the leader before returning.
+   * This method exists for testing purposes.
    */
-  def submitQuery(query: ReadCommand): ZIO[Clock, RaftException, Option[T]] =
+  private[raft] def submitQuery(query: ReadCommand): ZIO[Clock, RaftException, Option[T]] =
     stateMachine.read(query)
 
 }

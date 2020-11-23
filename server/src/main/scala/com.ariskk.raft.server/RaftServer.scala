@@ -9,7 +9,6 @@ import com.ariskk.raft.model._
 import com.ariskk.raft.storage._
 import com.ariskk.raft.statemachine.StateMachine
 import com.ariskk.raft.Raft
-import Message._
 
 final class RaftServer[T](
   config: RaftServer.Config,
@@ -71,13 +70,7 @@ final class RaftServer[T](
     serde   <- serdeRef.get
     message <- ZIO.fromEither(serde.deserialize[Message](bytes))
     raft    <- raftRef.get
-    _ <- message match {
-      case v: VoteRequest           => raft.offerVoteRequest(v)
-      case v: VoteResponse          => raft.offerVote(v)
-      case ae: AppendEntries        => raft.offerAppendEntries(ae)
-      case r: AppendEntriesResponse => raft.offerAppendEntriesResponse(r)
-      case _                        => ZIO.die(new UnsupportedOperationException("Message type not supported"))
-    }
+    _       <- raft.offerMessage(message)
   } yield ()
 
   private lazy val peerChannels = peerConfig.map { peer =>
@@ -108,7 +101,6 @@ final class RaftServer[T](
     }.forever
   } yield ()
 
-  // todo cleanup
   lazy val run = for {
     raft                    <- raftRef.get
     raftFiber               <- raft.run.fork

@@ -2,7 +2,7 @@ package com.ariskk.raft.model
 
 import scala.util.Random
 
-final case class ElectionTimeout(value: Int) extends AnyVal
+final case class ElectionTimeout(millis: Int) extends AnyVal
 
 object ElectionTimeout {
   private val base  = 150

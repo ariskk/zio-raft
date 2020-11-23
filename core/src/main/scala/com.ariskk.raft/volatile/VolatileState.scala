@@ -79,7 +79,7 @@ final class VolatileState(
     set   <- votesReceived.get.map(_.toList)
     peers <- peerList
     hasMajority = 2 * set.size > peers.size + 1
-    _ <- if (hasMajority) becomeLeader else ZIO.unit
+    _ <- ZIO.when(hasMajority)(becomeLeader)
   } yield hasMajority
 
   def addVoteRejection(vote: Vote) = for {
@@ -88,7 +88,7 @@ final class VolatileState(
     set   <- votesRejected.get
     peers <- peerList
     hasLost = 2 * set.size > peers.size + 1
-    _ <- if (hasLost) becomeFollower else ZIO.unit
+    _ <- ZIO.when(hasLost)(becomeFollower)
   } yield hasLost
 
   def hasLost(term: Term) = for {

@@ -16,7 +16,7 @@ import NodeState._
 
 object RocksDBSpec extends DefaultRunnableSpec {
 
-  override def aspects = List(TestAspect.timeout(5.seconds))
+  override def aspects = List(TestAspect.timeout(10.seconds))
 
   private def createStorage =
     RocksDBStorage.apply(s"/tmp/rocks-${UUID.randomUUID().toString.take(10)}", "DB")

@@ -10,7 +10,7 @@ import Message._
 
 object RaftSpec extends BaseSpec {
 
-  override def aspects = List(TestAspect.timeout(3.seconds))
+  override def aspects = List(TestAspect.timeout(10.seconds))
 
   def spec = suite("RaftSpec")(
     testM("By default a node should be in Follower state") {
@@ -74,14 +74,14 @@ object RaftSpec extends BaseSpec {
         firstRequest = VoteRequest(peer, raft.nodeId, Term(4), Index(1), Term(2))
         // Candidate log is smaller than follower log
         secondRequest = VoteRequest(peer, raft.nodeId, Term(4), Index(0), Term(1))
-        _ <- raft.offerVoteRequest(firstRequest)
+        _ <- raft.offerMessage(firstRequest)
         _ <- raft.poll.repeatUntil { response =>
           response match {
             case Some(VoteResponse(_, _, _, granted)) => granted == false
             case _                                    => false
           }
         }
-        _ <- raft.offerVoteRequest(secondRequest)
+        _ <- raft.offerMessage(secondRequest)
         _ <- raft.poll.repeatUntil { response =>
           response match {
             case Some(VoteResponse(_, _, _, granted)) => granted == false

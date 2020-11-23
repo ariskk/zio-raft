@@ -13,7 +13,7 @@ import com.ariskk.raft.rocksdb._
 
 object RaftServerSpec extends DefaultRunnableSpec {
 
-  override def aspects = List(TestAspect.timeout(5.seconds))
+  override def aspects = List(TestAspect.timeout(10.seconds))
 
   private lazy val serde = Serde.kryo
 
