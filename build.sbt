@@ -1,7 +1,7 @@
 inThisBuild(
   List(
-    scalaVersion := "2.13.2",
-    version := "0.1.0-SNAPSHOT",
+    scalaVersion := "2.13.7",
+    version := "0.2.0-SNAPSHOT",
     organization := "com.ariskk",
     developers := List(
       Developer(
@@ -14,7 +14,7 @@ inThisBuild(
   )
 )
 
-lazy val zioVersion = "1.0.1"
+lazy val zioVersion = "1.0.13"
 lazy val zioDeps = Seq(
   "dev.zio" %% "zio" % zioVersion
 )
@@ -31,20 +31,20 @@ lazy val testDepds = Seq(
 )
 
 lazy val otherDepds = Seq(
-  "com.chuusai" %% "shapeless" % "2.4.0-M1",
+  "com.chuusai" %% "shapeless" % "2.3.9",
   "com.twitter" %% "chill" % "0.9.5"
 )
 
 lazy val CompileTest = "compile->compile;test->test"
 
-lazy val core = (project in file("core"))
+lazy val core = project in file("core")
 
 lazy val rocksdb = (project in file("rocksdb")).settings(
   libraryDependencies ++= rocksDbDeps
 ).dependsOn(core % CompileTest)
 
 lazy val server = (project in file("server")).settings(
-  libraryDependencies +=  "dev.zio" %% "zio-nio" % "1.0.0-RC10"
+  libraryDependencies +=  "dev.zio" %% "zio-nio" % "1.0.0-RC12"
 ).dependsOn(
   core % CompileTest,
   rocksdb % CompileTest

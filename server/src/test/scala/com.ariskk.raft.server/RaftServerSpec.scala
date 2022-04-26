@@ -4,12 +4,11 @@ import zio.test.{ DefaultRunnableSpec, _ }
 import zio.test.Assertion._
 import zio.test.environment._
 import zio.duration._
-import zio.nio.core._
 import zio.ZIO
-
 import com.ariskk.raft.model._
 import com.ariskk.raft.statemachine._
 import com.ariskk.raft.rocksdb._
+import zio.nio.InetAddress
 
 object RaftServerSpec extends DefaultRunnableSpec {
 
@@ -49,8 +48,8 @@ object RaftServerSpec extends DefaultRunnableSpec {
         client  <- createClient(configs)
         fibers  <- live(ZIO.collectAll(servers.map(_.run.fork)))
         _ <- ZIO.collectAll(servers.map(_.getState)).repeatUntil { states =>
-          states.filter(_ == NodeState.Leader).size == 1 &&
-          states.filter(_ == NodeState.Follower).size == 2
+          states.count(_ == NodeState.Leader) == 1 &&
+          states.count(_ == NodeState.Follower) == 2
         }
         _ <- ZIO.collectAll((1 to 5).map(i => live(client.submitCommand(WriteKey(Key(s"key-$i"), i)))))
         _ <- ZIO.collectAll(

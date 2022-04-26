@@ -99,8 +99,8 @@ object RocksDBSpec extends DefaultRunnableSpec {
         cluster <- TestCluster.forNodes[Int](nodes.toSeq, chaos = false)
         fiber   <- live(cluster.run.fork)
         states <- cluster.getNodeStates.repeatUntil { ns =>
-          ns.filter(_ == Leader).size == 1 &&
-          ns.filter(_ == Follower).size == 2
+          ns.count(_ == Leader) == 1 &&
+          ns.count(_ == Follower) == 2
         }
         commands = (1 to 5).map(i => WriteKey(Key(s"key$i"), i))
         _ <- ZIO.collectAll(commands.map(cluster.submitCommand))
