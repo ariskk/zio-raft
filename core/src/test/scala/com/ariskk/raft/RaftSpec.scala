@@ -7,10 +7,6 @@ import zio.test.Assertion.equalTo
 import zio.test.environment.TestClock
 import zio.test.{ assertM, TestAspect }
 
-/**
- * @author 梦境迷离
- * @version 1.0,2022/4/27
- */
 object RaftSpec extends BaseSpec {
 
   override def aspects = List(TestAspect.timeout(10.seconds))

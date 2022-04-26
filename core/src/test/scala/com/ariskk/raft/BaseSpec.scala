@@ -8,10 +8,6 @@ import zio.duration.durationInt
 import zio.test.environment.{ live, Live }
 import zio.test.{ DefaultRunnableSpec, TestAspect }
 
-/**
- * @author 梦境迷离
- * @version 1.0,2022/4/27
- */
 trait BaseSpec extends DefaultRunnableSpec {
 
   override def aspects = List(TestAspect.timeout(2.seconds))
