@@ -22,15 +22,12 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        java-version: [ 8 ]
     steps:
       - uses: actions/checkout@v2
       - name: Set up JDK
         uses: actions/setup-java@v1
         with:
-          java-version: ${{ matrix.java-version }}
+          java-version: 1.8
 
       - name: Run Test
         run: sbt coverage test coverageReport
