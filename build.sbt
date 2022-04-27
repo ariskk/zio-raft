@@ -1,6 +1,13 @@
+import sbtrelease.ReleaseStateTransformations._
+
+// TODO Add GitHub BOT to automatically upgrade the version
+lazy val scala212   = "2.12.14"
+lazy val scala213   = "2.13.7"
+lazy val zioVersion = "1.0.13"
+
 inThisBuild(
   List(
-    scalaVersion := "2.13.7",
+    scalaVersion := scala213,
     version := "0.2.0-SNAPSHOT",
     organization := "com.ariskk",
     developers := List(
@@ -14,7 +21,6 @@ inThisBuild(
   )
 )
 
-lazy val zioVersion = "1.0.13"
 lazy val zioDeps = Seq(
   "dev.zio" %% "zio" % zioVersion
 )
@@ -25,41 +31,69 @@ lazy val rocksDbDeps = Seq(
 )
 
 lazy val testDepds = Seq(
-  "dev.zio" %% "zio-test" % zioVersion % Test,
-  "dev.zio" %% "zio-test-sbt" % zioVersion % Test,
-  "org.scalatest" %% "scalatest" % "3.2.0" % Test
+  "dev.zio"       %% "zio-test"     % zioVersion % Test,
+  "dev.zio"       %% "zio-test-sbt" % zioVersion % Test,
+  "org.scalatest" %% "scalatest"    % "3.2.0"    % Test
 )
 
 lazy val otherDepds = Seq(
   "com.chuusai" %% "shapeless" % "2.3.9",
-  "com.twitter" %% "chill" % "0.9.5"
+  "com.twitter" %% "chill"     % "0.9.5"
 )
 
 lazy val CompileTest = "compile->compile;test->test"
 
-lazy val core = project in file("core")
+lazy val core = (project in file("core")).settings(Publishing.publishSettings)
 
-lazy val rocksdb = (project in file("rocksdb")).settings(
-  libraryDependencies ++= rocksDbDeps
-).dependsOn(core % CompileTest)
+lazy val rocksdb = (project in file("rocksdb"))
+  .settings(
+    libraryDependencies ++= rocksDbDeps,
+    Publishing.publishSettings
+  )
+  .dependsOn(core % CompileTest)
 
-lazy val server = (project in file("server")).settings(
-  libraryDependencies +=  "dev.zio" %% "zio-nio" % "1.0.0-RC12"
-).dependsOn(
-  core % CompileTest,
-  rocksdb % CompileTest
-)
+lazy val server = (project in file("server"))
+  .settings(
+    libraryDependencies += "dev.zio" %% "zio-nio" % "1.0.0-RC12",
+    Publishing.publishSettings
+  )
+  .dependsOn(
+    core    % CompileTest,
+    rocksdb % CompileTest
+  )
 
+// TODO publish, exec `sbt release` to publish release version
 lazy val root = (project in file("."))
+  .settings(commands ++= Commands.value)
   .settings(
     name := "zio-raft",
-    libraryDependencies in ThisBuild ++= zioDeps ++ testDepds ++ otherDepds,
-    testFrameworks in ThisBuild += new TestFramework("zio.test.sbt.ZTestFramework"),
-    scalacOptions in ThisBuild ++= List(
+    ThisBuild / libraryDependencies ++= zioDeps ++ testDepds ++ otherDepds,
+    crossScalaVersions := List(scala213, scala212),
+    ThisBuild / testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"),
+    ThisBuild / scalacOptions ++= List(
       "-Wunused:imports"
     ),
+    publish / skip := true,
+    ThisBuild / scalafixDependencies += "com.nequissimus" %% "sort-imports" % "0.6.1",
+    releaseIgnoreUntrackedFiles := true,
+    releaseTagName := (ThisBuild / version).value,
+    releasePublishArtifactsAction := PgpKeys.publishSigned.value,
+    releaseProcess := Seq[ReleaseStep](
+      checkSnapshotDependencies,
+      inquireVersions,
+      runClean,
+      releaseStepCommandAndRemaining("+compile"),
+      releaseStepCommandAndRemaining("test"),
+      setReleaseVersion,
+      commitReleaseVersion,
+      tagRelease,
+      releaseStepCommandAndRemaining("+publishSigned"),
+      setNextVersion,
+      commitNextVersion,
+      pushChanges
+    ),
     addCompilerPlugin(scalafixSemanticdb),
-    semanticdbEnabled in ThisBuild := true,
-    semanticdbVersion in ThisBuild := scalafixSemanticdb.revision
+    ThisBuild / semanticdbEnabled := true,
+    ThisBuild / semanticdbVersion := scalafixSemanticdb.revision
   )
   .aggregate(core, rocksdb, server)

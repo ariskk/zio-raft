@@ -1,20 +1,21 @@
 package com.ariskk.raft.rocksdb
 
-import com.ariskk.raft.model.RaftException.{ SerializationException, StorageException }
-import com.ariskk.raft.model._
-import org.rocksdb.RocksDB
-import zio._
-
 import scala.collection.JavaConverters._
 import scala.reflect.ClassTag
 import scala.util.Try
+
+import org.rocksdb.RocksDB
+import zio._
+
+import com.ariskk.raft.model.RaftException.{ SerializationException, StorageException }
+import com.ariskk.raft.model._
 
 abstract class RocksDBSupport(
   dbRef: Ref[RocksDB],
   serdeRef: Ref[Serde]
 ) {
 
-  def withDB[T, R](f: RocksDB => T): ZIO[Any, StorageException, T] = for {
+  def withDB[T](f: RocksDB => T): ZIO[Any, StorageException, T] = for {
     rocksDB <- dbRef.get
     bytes <- ZIO
       .fromTry(Try(f(rocksDB)))

@@ -1,13 +1,14 @@
 package com.ariskk.raft.rocksdb
 
-import com.ariskk.raft.model.RaftException.StorageException
-import com.ariskk.raft.model._
-import com.ariskk.raft.storage.Storage
+import java.io._
+import java.nio.file.Files
+
 import org.rocksdb._
 import zio._
 
-import java.io._
-import java.nio.file.Files
+import com.ariskk.raft.model.RaftException.StorageException
+import com.ariskk.raft.model._
+import com.ariskk.raft.storage.Storage
 
 final class RocksDBStorage(
   dbRef: Ref[RocksDB],
@@ -36,7 +37,7 @@ object RocksDBStorage {
     for {
       _        <- ZIO.effect(RocksDB.loadLibrary())
       _        <- ZIO.effect(Files.createDirectories(dbDir.getParentFile.toPath))
-      _        <- ZIO.effect(Files.createDirectories(dbDir.getAbsoluteFile.toPath()))
+      _        <- ZIO.effect(Files.createDirectories(dbDir.getAbsoluteFile.toPath))
       db       <- ZIO.effect(RocksDB.open(options, dbDir.getAbsolutePath))
       dbRef    <- Ref.make(db)
       serdeRef <- Ref.make(Serde.kryo)

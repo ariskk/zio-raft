@@ -1,17 +1,18 @@
 package com.ariskk.raft.server
 
+import java.io.IOException
+
+import zio._
+import zio.clock.Clock
+import zio.nio.channels._
+import zio.nio.{ InetAddress, InetSocketAddress }
+
 import com.ariskk.raft.Raft
 import com.ariskk.raft.model.Command._
 import com.ariskk.raft.model.RaftException.StorageException
 import com.ariskk.raft.model._
 import com.ariskk.raft.statemachine.StateMachine
 import com.ariskk.raft.storage._
-import zio._
-import zio.clock.Clock
-import zio.nio.channels._
-import zio.nio.{ InetAddress, InetSocketAddress }
-
-import java.io.IOException
 
 final class RaftServer[T](
   config: RaftServer.Config,

@@ -1,7 +1,8 @@
 package com.ariskk.raft.storage
 
-import com.ariskk.raft.model.RaftException.StorageException
 import zio._
+
+import com.ariskk.raft.model.RaftException.StorageException
 import com.ariskk.raft.model._
 
 /**

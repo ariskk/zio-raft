@@ -1,8 +1,9 @@
 package com.ariskk.raft.statemachine
 
+import zio._
+
 import com.ariskk.raft.model.Command.{ ReadCommand, WriteCommand }
 import com.ariskk.raft.model.RaftException.StateMachineException
-import zio._
 
 /**
  * Very simplistic modeling

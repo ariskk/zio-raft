@@ -1,12 +1,13 @@
 package com.ariskk.raft
 
-import com.ariskk.raft.model.Command.{ ReadCommand, WriteCommand }
-import com.ariskk.raft.model._
+import scala.util.Random
+
 import zio._
 import zio.clock.Clock
 import zio.duration._
 
-import scala.util.Random
+import com.ariskk.raft.model.Command.{ ReadCommand, WriteCommand }
+import com.ariskk.raft.model._
 
 /**
  * Relays messages between Raft consensus modules to allow for quick in-memory leader election

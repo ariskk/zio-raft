@@ -1,5 +1,9 @@
 package com.ariskk.raft
 
+import zio._
+import zio.clock._
+import zio.duration._
+
 import com.ariskk.raft.Raft.MessageQueues
 import com.ariskk.raft.model.Command.{ ReadCommand, WriteCommand }
 import com.ariskk.raft.model.CommandResponse.{ Committed, LeaderNotFoundResponse, Redirect }
@@ -9,9 +13,6 @@ import com.ariskk.raft.model._
 import com.ariskk.raft.statemachine.StateMachine
 import com.ariskk.raft.storage.Storage
 import com.ariskk.raft.volatilestate.VolatileState
-import zio._
-import zio.clock._
-import zio.duration._
 
 /**
  * Runs the consensus module of a single Raft Node.
@@ -94,7 +95,7 @@ final class Raft[T] private (
    * of matchIndex[i] ≥ N, and log[N].term == currentTerm:
    * set commitIndex = N (§5.3, §5.4).
    */
-  private def updateCommitIndex() = for {
+  private def updateCommitIndex(): ZIO[Any, StorageException, Unit] = for {
     term            <- storage.getTerm
     lastCommitIndex <- state.lastCommitIndex
     lastIndex       <- storage.lastIndex
@@ -165,7 +166,7 @@ final class Raft[T] private (
             state.becomeFollower
         else if (newVote.term == forTerm && newVote.granted)
           state.addVote(Vote(newVote.from, newVote.term)).flatMap { hasWon =>
-            ZIO.when(hasWon)(storage.lastIndex.flatMap(state.initPeerIndices(_)))
+            ZIO.when(hasWon)(storage.lastIndex.flatMap(state.initPeerIndices))
           }
         else if (newVote.term == forTerm && !newVote.granted)
           state.addVoteRejection(Vote(newVote.from, newVote.term))
@@ -374,7 +375,7 @@ object Raft {
 
     private val DefaultQueueSize = 100
 
-    private def newQueue[T](queueSize: Int) =
+    private def newQueue[T](queueSize: Int): UIO[Queue[T]] =
       Queue.bounded[T](queueSize)
 
     def default: UIO[MessageQueues] = apply(DefaultQueueSize)

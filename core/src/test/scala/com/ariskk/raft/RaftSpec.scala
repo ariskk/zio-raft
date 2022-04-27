@@ -1,11 +1,12 @@
 package com.ariskk.raft
 
-import com.ariskk.raft.model.Message.{ VoteRequest, VoteResponse }
-import com.ariskk.raft.model._
 import zio.duration.durationInt
 import zio.test.Assertion.equalTo
 import zio.test.environment.TestClock
 import zio.test.{ assertM, TestAspect }
+
+import com.ariskk.raft.model.Message.{ VoteRequest, VoteResponse }
+import com.ariskk.raft.model._
 
 object RaftSpec extends BaseSpec {
 

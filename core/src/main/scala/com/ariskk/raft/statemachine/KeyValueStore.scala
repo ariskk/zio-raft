@@ -1,7 +1,8 @@
 package com.ariskk.raft.statemachine
 
-import com.ariskk.raft.model.Command.{ ReadCommand, WriteCommand }
 import zio._
+
+import com.ariskk.raft.model.Command.{ ReadCommand, WriteCommand }
 
 final case class Key(value: String)              extends AnyVal
 final case class ReadKey(key: Key)               extends ReadCommand

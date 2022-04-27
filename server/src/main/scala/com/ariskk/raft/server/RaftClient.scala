@@ -1,17 +1,19 @@
 package com.ariskk.raft.server
 
-import com.ariskk.raft.model.Command.{ ReadCommand, WriteCommand }
-import com.ariskk.raft.model.CommandResponse._
-import com.ariskk.raft.model._
+import java.io.IOException
+
+import scala.reflect.ClassTag
+import scala.util.Random
+
 import zio._
 import zio.clock.Clock
 import zio.duration._
 import zio.nio.channels._
 import zio.nio.{ InetAddress, InetSocketAddress }
 
-import java.io.IOException
-import scala.reflect.ClassTag
-import scala.util.Random
+import com.ariskk.raft.model.Command.{ ReadCommand, WriteCommand }
+import com.ariskk.raft.model.CommandResponse._
+import com.ariskk.raft.model._
 final class RaftClient(
   nodes: Seq[RaftServer.Config],
   serdeRef: Ref[Serde],

@@ -1,12 +1,13 @@
 package com.ariskk.raft
 
-import com.ariskk.raft.model.NodeState
-import com.ariskk.raft.model.NodeState.{ Follower, Leader }
-import com.ariskk.raft.statemachine.{ Key, WriteKey }
-import zio.{ Fiber, ZIO }
 import zio.duration.durationInt
 import zio.test.environment.{ live, Live }
 import zio.test.{ DefaultRunnableSpec, TestAspect }
+import zio.{ Fiber, ZIO }
+
+import com.ariskk.raft.model.NodeState
+import com.ariskk.raft.model.NodeState.{ Follower, Leader }
+import com.ariskk.raft.statemachine.{ Key, WriteKey }
 
 trait BaseSpec extends DefaultRunnableSpec {
 

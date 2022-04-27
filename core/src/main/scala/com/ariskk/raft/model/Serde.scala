@@ -1,11 +1,12 @@
 package com.ariskk.raft.model
 
-import com.ariskk.raft.model.RaftException.SerializationException
-
-import scala.util._
 import scala.reflect.ClassTag
-import shapeless.syntax.typeable._
+import scala.util._
+
 import com.twitter.chill.ScalaKryoInstantiator
+import shapeless.syntax.typeable._
+
+import com.ariskk.raft.model.RaftException.SerializationException
 
 trait Serde {
   def serialize[T: ClassTag](t: T): Array[Byte]

@@ -1,10 +1,11 @@
 package com.ariskk.raft
 
-import com.ariskk.raft.statemachine.{ Key, ReadKey }
 import zio.ZIO
 import zio.duration.durationInt
 import zio.test.Assertion.equalTo
 import zio.test.{ assertM, TestAspect }
+
+import com.ariskk.raft.statemachine.{ Key, ReadKey }
 
 /**
  * Those tests use the live clock and emulate a faulty network.

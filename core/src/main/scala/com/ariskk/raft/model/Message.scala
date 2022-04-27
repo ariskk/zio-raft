@@ -28,7 +28,7 @@ object Message {
   object AppendEntries {
     case class Id(value: String) extends AnyVal
 
-    def newUniqueId = Id(Utils.newPrefixedId("append"))
+    def newUniqueId: Id = Id(Utils.newPrefixedId("append"))
   }
 
   final case class AppendEntries(

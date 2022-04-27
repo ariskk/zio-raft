@@ -2,17 +2,16 @@ package com.ariskk.raft.rocksdb
 
 import java.util.UUID
 
-import zio.test.{ DefaultRunnableSpec, _ }
+import zio.ZIO
+import zio.duration._
 import zio.test.Assertion._
 import zio.test.environment._
-import zio.duration._
-import zio.ZIO
+import zio.test.{ DefaultRunnableSpec, _ }
 
 import com.ariskk.raft._
-import com.ariskk.raft.TestCluster
+import com.ariskk.raft.model.NodeState._
 import com.ariskk.raft.model._
 import com.ariskk.raft.statemachine._
-import NodeState._
 
 object RocksDBSpec extends DefaultRunnableSpec {
 

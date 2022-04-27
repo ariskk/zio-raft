@@ -1,7 +1,8 @@
 package com.ariskk.raft.volatilestate
 
-import com.ariskk.raft.model._
 import zio.{ UIO, _ }
+
+import com.ariskk.raft.model._
 
 final class VolatileState(
   val nodeId: NodeId,
@@ -104,7 +105,7 @@ final class VolatileState(
 }
 
 object VolatileState {
-  def apply[T](nodeId: NodeId, peers: Set[NodeId]): UIO[VolatileState] = for {
+  def apply(nodeId: NodeId, peers: Set[NodeId]): UIO[VolatileState] = for {
     peerRef          <- Ref.make[Set[NodeId]](peers)
     leaderRef        <- Ref.make[Option[NodeId]](None)
     stateRef         <- Ref.make[NodeState](NodeState.Follower)

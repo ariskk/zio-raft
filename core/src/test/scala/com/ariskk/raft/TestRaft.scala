@@ -1,9 +1,10 @@
 package com.ariskk.raft
 
+import zio.UIO
+
 import com.ariskk.raft.model.NodeId
 import com.ariskk.raft.statemachine.KeyValueStore
 import com.ariskk.raft.storage.MemoryStorage
-import zio.UIO
 
 /**
  * Generates Raft instances using MemoryStorage and KeyValueStore

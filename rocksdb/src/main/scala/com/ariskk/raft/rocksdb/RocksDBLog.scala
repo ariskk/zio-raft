@@ -1,10 +1,11 @@
 package com.ariskk.raft.rocksdb
 
+import org.rocksdb.RocksDB
+import zio._
+
 import com.ariskk.raft.model.RaftException.StorageException
 import com.ariskk.raft.model._
 import com.ariskk.raft.storage.Log
-import org.rocksdb.RocksDB
-import zio._
 
 /**
  * The current index is kept in a special key called `index`.
@@ -18,7 +19,7 @@ final class RocksDBLog(
   private val LogIndex = "index".getBytes()
   private val Start    = -1
 
-  private[raft] def logEntryKey(index: Int) = s"logEntry-${index}".getBytes()
+  private[raft] def logEntryKey(index: Int): Array[Byte] = s"logEntry-${index}".getBytes()
 
   private[raft] def lastIndex: IO[StorageException, Int] = getKey[Int](LogIndex)
     .map(_.getOrElse(Start))

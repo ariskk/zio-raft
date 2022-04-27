@@ -1,14 +1,15 @@
 package com.ariskk.raft.server
 
-import zio.test.{ DefaultRunnableSpec, _ }
+import zio.ZIO
+import zio.duration._
+import zio.nio.InetAddress
 import zio.test.Assertion._
 import zio.test.environment._
-import zio.duration._
-import zio.ZIO
+import zio.test.{ DefaultRunnableSpec, _ }
+
 import com.ariskk.raft.model._
-import com.ariskk.raft.statemachine._
 import com.ariskk.raft.rocksdb._
-import zio.nio.InetAddress
+import com.ariskk.raft.statemachine._
 
 object RaftServerSpec extends DefaultRunnableSpec {
 
