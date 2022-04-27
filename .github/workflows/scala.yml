@@ -12,10 +12,36 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v2
-    - name: Set up JDK 1.8
-      uses: actions/setup-java@v1
-      with:
-        java-version: 1.8
-    - name: Run tests
-      run: sbt scalafmtCheck test:scalafmtCheck test
+      - uses: actions/checkout@v2
+      - name: Set up JDK 1.8
+        uses: actions/setup-java@v1
+        with:
+          java-version: 1.8
+      - name: Check Code Style
+        run: sbt +compile check
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up JDK
+        uses: actions/setup-java@v1
+        with:
+          java-version: 1.8
+
+      - name: Run Test
+        run: sbt coverage test coverageReport
+
+      - name: Aggregate coverage report
+        run: sbt coverageAggregate
+  
+  # it needs be allow in https://codecov.io
+  #      - name: Upload test coverage report 
+  #        run: bash <(curl -s https://codecov.io/bash)
+
+  ci:
+    runs-on: ubuntu-20.04
+    needs: [ build, test ]
+    steps:
+      - name: Aggregate outcomes
+        run: echo "build succeeded"
