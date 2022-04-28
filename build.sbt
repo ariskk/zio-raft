@@ -43,11 +43,16 @@ lazy val otherDepds = Seq(
 
 lazy val CompileTest = "compile->compile;test->test"
 
-lazy val core = (project in file("core")).settings(Publishing.publishSettings)
+lazy val core = (project in file("core")).settings(
+  Publishing.publishSettings,
+  name := "zio-raft",
+)
 
 lazy val rocksdb = (project in file("rocksdb"))
   .settings(
     libraryDependencies ++= rocksDbDeps,
+    publish / skip := true,
+    name := "zio-raft-rocksdb",
     Publishing.publishSettings
   )
   .dependsOn(core % CompileTest)
@@ -55,6 +60,8 @@ lazy val rocksdb = (project in file("rocksdb"))
 lazy val server = (project in file("server"))
   .settings(
     libraryDependencies += "dev.zio" %% "zio-nio" % "1.0.0-RC12",
+    publish / skip := true,
+    name := "zio-raft-server",
     Publishing.publishSettings
   )
   .dependsOn(
@@ -62,11 +69,9 @@ lazy val server = (project in file("server"))
     rocksdb % CompileTest
   )
 
-// TODO publish, exec `sbt release` to publish release version
 lazy val root = (project in file("."))
   .settings(commands ++= Commands.value)
   .settings(
-    name := "zio-raft",
     ThisBuild / libraryDependencies ++= zioDeps ++ testDepds ++ otherDepds,
     crossScalaVersions := List(scala213, scala212),
     ThisBuild / testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"),
